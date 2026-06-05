@@ -1,0 +1,566 @@
+---
+title: "SSMT Climatic Transfer Distance Models"
+author: "Michelle C. Agne"
+date: "2026-06-02"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review / revision
+
+
+
+# Purpose and methods
+This script conducts the analyses and produces visualization for AIC selected models of climate transfer distance effects on eight tree health indicator response variables. All tree health indicators were simplified to binary (presence/absence) variables. Resulting models assessed probability of a given tree health indicator, and were therefore fit with a binomial distribution and logit link.
+
+Candidate models were fit with transfer distance for one temperature-related variable (MCMT, MWMT, or MAT), one precipitation-related variable (MAP, MSP, or SHM), and temperature differential (TD, also known as continentality index). For each term in the model, the quadratic version of the term was also included. Climate variables were checked for multicollinearity prior to model fitting.
+
+All three-way and two-way combinations were fit as well as all single term models and a random effects only model, resulting in 30 candidate models per response variable. 
+
+All candidate models also included a random effect for seed source region as well as nested random effects of plot within block within site. 
+Exceptions: crown transparency models only included a random effect for seed source and a random effect of site due to model convergence issues with additional nested random effects (in all candidate models). Sunken bole only included a random effect for seed source region and nested random effects of  block within site due to model convergence issues with additional nested random effect (in all candidate models).
+
+All models were evaluated for convergence prior to model selection. Models that did not converge were excluded from model selection. The remaining models for each response variable were compared using AIC. We selected the model with the lowest AIC, although all models within deltaAIC of 2 were considered as equally "good" models. When there were multiple models within 2 deltaAIC, we selected the form that minimized the number of non-significant terms in the model while retaining significant predictors.
+
+Model selection script is available in ssmtFH - FINAL AIC.Rmd - this script generates the output for Figures 2-4 and Tables S5 and S6
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(AICcmodavg)
+library(scales)
+library(glmmTMB)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(dotwhisker)
+```
+
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) 
+```
+
+# Read in standardized forest health metrics
+```{r}
+live_trees_w_homesource <- read.csv("live_trees_w_homesource.csv", row.names=1, na.strings="NA")
+```
+
+## Join
+```{r}
+live_trees_cond <- live_trees_w_homesource %>% dplyr::select(S, PLT, TAG, STEM:Gall_diff)
+
+field_climate_08_23 <- right_join(field_climate_08_23_inc,live_trees_cond, by=c("S","PLT","TAG")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))
+```
+
+## Standardize all predictors
+```{r, echo=FALSE}
+field_climate_08_23$Site_MCMT_std <- (field_climate_08_23$Site_MCMT - mean(field_climate_08_23$Site_MCMT))/(2*sd(field_climate_08_23$Site_MCMT))
+field_climate_08_23$MCMT_dist_std <- (field_climate_08_23$MCMT_dist - mean(field_climate_08_23$MCMT_dist))/(2*sd(field_climate_08_23$MCMT_dist))
+field_climate_08_23$Site_MWMT_std <- (field_climate_08_23$Site_MWMT - mean(field_climate_08_23$Site_MWMT))/(2*sd(field_climate_08_23$Site_MWMT))
+field_climate_08_23$MWMT_dist_std <- (field_climate_08_23$MWMT_dist - mean(field_climate_08_23$MWMT_dist))/(2*sd(field_climate_08_23$MWMT_dist))
+field_climate_08_23$Site_MSP_std <- (field_climate_08_23$Site_MSP - mean(field_climate_08_23$Site_MSP))/(2*sd(field_climate_08_23$Site_MSP))
+field_climate_08_23$MSP_dist_std <- (field_climate_08_23$MSP_dist - mean(field_climate_08_23$MSP_dist))/(2*sd(field_climate_08_23$MSP_dist))
+field_climate_08_23$Site_TD_std <- (field_climate_08_23$Site_TD - mean(field_climate_08_23$Site_TD))/(2*sd(field_climate_08_23$Site_TD))
+field_climate_08_23$TD_dist_std <- (field_climate_08_23$TD_dist - mean(field_climate_08_23$TD_dist))/(2*sd(field_climate_08_23$TD_dist))
+field_climate_08_23$Site_SHM_std <- (field_climate_08_23$Site_SHM - mean(field_climate_08_23$Site_SHM))/(2*sd(field_climate_08_23$Site_SHM))
+field_climate_08_23$SHM_dist_std <- (field_climate_08_23$SHM_dist - mean(field_climate_08_23$SHM_dist))/(2*sd(field_climate_08_23$SHM_dist))
+field_climate_08_23$Site_MAP_std <- (field_climate_08_23$Site_MAP - mean(field_climate_08_23$Site_MAP))/(2*sd(field_climate_08_23$Site_MAP))
+field_climate_08_23$MAP_dist_std <- (field_climate_08_23$MAP_dist - mean(field_climate_08_23$MAP_dist))/(2*sd(field_climate_08_23$MAP_dist))
+field_climate_08_23$Site_MAT_std <- (field_climate_08_23$Site_MAT - mean(field_climate_08_23$Site_MAT))/(2*sd(field_climate_08_23$Site_MAT))
+field_climate_08_23$MAT_dist_std <- (field_climate_08_23$MAT_dist - mean(field_climate_08_23$MAT_dist))/(2*sd(field_climate_08_23$MAT_dist))
+```
+
+
+
+# Results from preferred models
+
+# Chlorosis
+## Preferred model
+Probability of yellow crown ~ Mean annual temperature transfer dist + square + Mean summer precipitation transfer dist + square + Temperature differential transfer dist + square 
+
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+mCC_7 <- glmer(CC_yellow ~ MAT_dist +  I(MAT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+mCC_7_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mCC_7_std) # Presented in Table S5, S6
+
+mCC_NULL <- glmer(CC_yellow ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mCC_NULL) # Variance components for null model Presented in Table S6
+
+# For use in Figure 2 - relative effects of coefficients
+CC_df<-tidy(mCC_7_std, conf.int = TRUE, effects = "fixed")
+CC_df$Indicator <- "Chlorosis"
+```
+
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfCC_TD_MSP<-ggpredict(mCC_7, terms = c("TD_dist [all]", "MSP_dist[-200,0,200]"))
+dfCC_MSP_MAT4<-ggpredict(mCC_7, terms = c("MSP_dist [all]", "MAT_dist[-4, -2, 0, 4]"))
+
+palMCMT4 <-hcl.colors(4, palette="Zissou 1", alpha=1)
+palMSPnew <- c("#A36B2BFF","#94B9A7FF","#2686A0FF")
+
+
+(pCC34<-ggplot(dfCC_MSP_MAT4, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("Mean temperature\ntransfer distance (°C)",values=palMCMT4) +
+    scale_fill_manual("Mean temperature\ntransfer distance (°C)",values=palMCMT4) +
+    guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "", title="Figure 3",
+         y ="Probability of chlorosis")+
+    # scale_y_continuous(limits=c(0.05,0.7))+
+    #geom_vline(xintercept=400)+
+    theme(legend.position=c(0.5,0.72))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+    #  annotate("text", x= -310, y = 0.75, label = "Figure 3", size=4))
+
+(pCC2<-ggplot(dfCC_TD_MSP, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew) +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew) +
+    guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "",
+         y ="Probability of chlorosis")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.85))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+```
+
+# Crown sparseness
+## Preferred model 
+Probability of sparse crown ~ Mean annual temperature transfer dist + square + Mean summer precipitation transfer dist + square + Temperature differential transfer dist + square 
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+mCT_7 <- glmer(CT_sparse ~ MAT_dist +  I(MAT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+mCT_7_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mCT_7_std) # Presented in Table S5, S6
+
+mCT_NULL <- glmer(CT_sparse ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mCT_NULL)# Variance components for null model Presented in Table S6
+
+# For use in Figure 2 - relative effects of coefficients
+CT_df<-tidy(mCT_7_std, conf.int = TRUE, effects = "fixed")
+CT_df$Indicator <- "Crown sparseness"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfCT_TD_MSP<-ggpredict(mCT_7, terms = c("TD_dist [all]", "MSP_dist[-200,0,200]"))
+dfCT_MSP_MAT4<-ggpredict(mCT_7, terms = c("MSP_dist [all]", "MAT_dist[-4,-2,0,4]"))
+
+(pCT2<-ggplot(dfCT_TD_MSP, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP\ntransfer\ndistance",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP\ntransfer\ndistance",values=palMSPnew, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of crown sparseness")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+(pCT34<-ggplot(dfCT_MSP_MAT4, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+
+# Branch dieback
+## Preferred model 
+Probability of branch dieback ~ Mean cold month temperature transfer dist + square + Mean summer precipitation transfer dist + square 
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+#  mBrDB_21 <- glmer(BrDB01 ~ MAT_dist+  I(MAT_dist^2) + MSP_dist + I(MSP_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#  
+#  mBrDB_21_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#  summary(mBrDB_21_std)  # Presented in Table S5, S6
+#  
+#  mBrDB_NULL <- glmer(BrDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#  summary(mBrDB_NULL)  # Variance components for null model Presented in Table S6
+#  
+#  # For use in Figure 2 - relative effects of coefficients
+# BrDB_df<-tidy(mBrDB_21_std, conf.int = TRUE, effects = "fixed")
+# BrDB_df$Indicator <- "Branch dieback"
+```
+
+## New preferred model
+```{r, echo=FALSE, warning=FALSE}
+ mBrDB_12 <- glmer(BrDB01 ~ MCMT_dist+  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ 
+ mBrDB_12_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mBrDB_12_std)  # Presented in Table S5, S6
+ 
+ mBrDB_NULL <- glmer(BrDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mBrDB_NULL)  # Variance components for null model Presented in Table S6
+ 
+ # For use in Figure 2 - relative effects of coefficients
+BrDB_df<-tidy(mBrDB_12_std, conf.int = TRUE, effects = "fixed")
+BrDB_df$Indicator <- "Branch dieback"
+```
+
+
+
+### Prediction plot
+```{r, echo=FALSE}
+dfBrDB_MSP_MAT<-ggpredict(mBrDB_12, terms = c("MSP_dist [all]", "MCMT_dist[-4,-2,0, 4]"))
+print(dfBrDB_MSP_MAT, n = Inf)
+palMCMT <-hcl.colors(3, palette="Zissou 1", alpha=1)
+```
+
+```{r,echo=FALSE}
+(pBrDB3<-ggplot(dfBrDB_MSP_MAT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MCMT transfer distance",values=palMCMT4, guide="none") +
+    scale_fill_manual("MCMT transfer distance",values=palMCMT4, guide="none") +
+      # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "May - September precipitation\ntransfer distance (mm)",
+         y ="Probability of branch dieback")+
+       theme(legend.position=c(0.4,0.8))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+
+# Figure 3 multipanel
+```{r, echo = FALSE}
+CCCTBRmult4 <- (pCC34/pCT34/pBrDB3)|(pCC2/pCT2/plot_spacer())
+CCCTBRmult_ann4 <- CCCTBRmult4 + plot_annotation(tag_levels = c("a"))
+
+ggsave(CCCTBRmult_ann4, file="SSMT_FH_CC_CT_Br_multi_Figure3.png", dpi=600, height=8.5, width=7)
+ggsave(CCCTBRmult_ann4, file="Figure3.eps", dpi=600, height=8.5, width=7)
+```
+
+
+# Tip dieback
+## Preferred model 
+Probability of tip dieback ~ Summer heat moisture index transfer dist + square + Temperature differential transfer dist + square 
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+ mTip_11 <- glmer(TipDB01 ~ SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+mTip_11_std <- glmer(TipDB01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mTip_11_std)  # Presented in Table S5, S6
+ 
+ mTip_NULL <- glmer(TipDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mTip_NULL) # Variance components for null model Presented in Table S6
+
+# For use in Figure 2 - relative effects of coefficients
+TipDB_df<-tidy(mTip_11_std, conf.int = TRUE, effects = "fixed")
+TipDB_df$Indicator <- "Tip dieback"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfTip_TD_SHM<-ggpredict(mTip_11, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+ 
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+
+(pTip011<-ggplot(dfTip_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+    guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of tip dieback", title="Figure 4")+
+      theme(legend.position=c(0.6,0.85))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+# Bacterial galls
+## Preferred model  
+Probability of bacterial galls ~ Mean annual temperature transfer dist + square + Summer heat moisture index transfer dist + square
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+ mGall_19 <- glmer(Gall ~ MAT_dist +  I(MAT_dist^2) + SHM_dist + I(SHM_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+mGall_19_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mGall_19_std)  # Presented in Table S5, S6
+ 
+mGall_NULL <- glmer(Gall ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mGall_NULL)  # Variance components for null model Presented in Table S6
+
+# For use in Figure 2 - relative effects of coefficients
+Gall_df<-tidy(mGall_19_std, conf.int = TRUE, effects = "fixed")
+Gall_df$Indicator <- "Bacterial galls"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfGall_MAT_SHM<-ggpredict(mGall_19, terms = c("MAT_dist [all]", "SHM_dist[-200, 0, 200]"))
+
+(pGall22<-ggplot(dfGall_MAT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD, guide="none") +
+    scale_fill_manual("SHM transfer distance",values=palTD, guide="none") +
+    scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean annual temperature\ntransfer distance (°C)",y ="Probability of bacterial galls")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+# Top dieback
+## Preferred model 
+Probability of top dieback ~ Summer heat moisture index transfer distance + square + Temperature differential transfer dist + square 
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+mTDB_11 <- glmer(TopDB01 ~ SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+mTDB_11_std <- glmer(TopDB01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mTDB_11_std)  # Presented in Table S5, S6
+
+mTDB_NULL <- glmer(TopDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mTDB_NULL) # Variance components for null model Presented in Table S6
+
+
+# For use in Figure 2 - relative effects of coefficients
+TDB_df<-tidy(mTDB_11_std, conf.int = TRUE, effects = "fixed")
+TDB_df$Indicator <- "Top dieback"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfTDB_TD_SHM <-ggpredict(mTDB_11, terms = c("TD_dist [all]", "SHM_dist[-200,0,200]"))
+
+(pTDB33<-ggplot(dfTDB_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD,guide="none") +
+    scale_fill_manual("SHM transfer distance",values=palTD,guide="none") +
+    scale_y_continuous(breaks=c(0,0.04,0.08,0.12,0.16))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",y ="Probability of top dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+
+# Sunken bole
+## Preferred model 
+Probability of sunken bole ~ Mean cold month temperature transfer dist + square + Summer heat moisture index transfer dist + square
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+mSnk_19 <- glmer(SnkBl01 ~ MAT_dist+  I(MAT_dist^2) + SHM_dist + I(SHM_dist^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+mSnk_19_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mSnk_19_std)  # Presented in Table S5, S6
+
+mSnk_NULL <- glmer(SnkBl01 ~ (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mSnk_NULL)  # Variance components for null model Presented in Table S6
+
+# For use in Figure 2 - relative effects of coefficients
+Snk_df<-tidy(mSnk_19_std, conf.int = TRUE, effects = "fixed")
+Snk_df$Indicator <- "Sunken bole"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfSnk_MAT_SHM<-ggpredict(mSnk_19, terms = c("MAT_dist [all]", "SHM_dist[-200,0,200]"))
+
+(pSnk33<-ggplot(dfSnk_MAT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD, guide="none") +
+    scale_fill_manual("SHM transfer distance",values=palTD, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean annual temperature\ntransfer distance (°C)",y ="Probability of sunken bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+
+# Pitch streaming on bole
+## Preferred model 
+Probability of pitch streaming on bole ~ Mean warm month temperature transfer dist + square + Summer heat moisture index transfer dist + square 
+Output from standardized predictors version, native scale fit for prediction figures
+```{r, echo=FALSE, warning=FALSE}
+mPBl_16 <- glmer(PBl01 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+ mPBl_16_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mPBl_16_std) # Presented in Table S5, S6
+ 
+mPBl_NULL <- glmer(PBl01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mPBl_NULL) # Variance components for null model Presented in Table S6
+ 
+ # For use in Figure 2 - relative effects of coefficients
+PBl_df<-tidy(mPBl_16_std, conf.int = TRUE, effects = "fixed")
+PBl_df$Indicator <- "Pitch streaming on bole"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfPBl_MWMT_SHM <-ggpredict(mPBl_16, terms = c(terms="MWMT_dist [all]", "SHM_dist[-200,0,200]"))
+
+(pPBl33<-ggplot(dfPBl_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD, guide="none") +
+    scale_fill_manual("SHM transfer distance",values=palTD, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    scale_y_continuous(breaks=c(0, 0.02,0.04,0.06,0.08,0.1,0.12))+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of pitch streaming on bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+
+# Figure 4 multipanel
+```{r, echo=FALSE}
+Fig4mult <- (pTip011/pTDB33/pSnk33)|(pPBl33/pGall22/plot_spacer())
+Fig4mult_ann <- Fig4mult + plot_annotation(tag_levels = c("a"))
+
+ggsave(Fig4mult_ann, file="SSMT_FH_TipTopBoleGall_Figure4.png", dpi=600, height=8.6, width=7)
+ggsave(Fig4mult_ann, file="Figure4.eps", dpi=600, height=8.6, width=7)
+```
+
+# Figure 2
+## Combine all fixed effect and CI dataframes
+```{r, echo=FALSE}
+fixed.eff.CI <- bind_rows(CC_df,CT_df,BrDB_df,Gall_df,TipDB_df,TDB_df, Snk_df, PBl_df) %>% 
+  mutate(term.simp = if_else(term == "(Intercept)", "Intercept",
+                             if_else(term == "MAT_dist_std", "MAT",
+                                     if_else(term =="I(MAT_dist_std^2)", "MAT",
+                                             if_else(term == "MSP_dist_std", "MSP",
+                                                     if_else(term == "I(MSP_dist_std^2)", "MSP",
+                                if_else(term=="TD_dist_std", "TD",
+                                    if_else(term=="I(TD_dist_std^2)", "TD",
+                                        if_else(term=="MCMT_dist_std", "MCMT",
+                                            if_else(term=="I(MCMT_dist_std^2)", "MCMT",
+                                                    if_else(term=="MWMT_dist_std", "MWMT",
+                                                         if_else(term=="I(MWMT_dist_std^2)", "MWMT",
+                                                               if_else(term=="SHM_dist_std", "SHM",
+                                                                   if_else(term=="I(SHM_dist_std^2)", "SHM","NA"))))))))))))))%>%
+  mutate(order = if_else(term == "(Intercept)", "NA",
+                             if_else(term == "MAT_dist_std", "first order",
+                                     if_else(term =="I(MAT_dist_std^2)", "square",
+                                             if_else(term == "MSP_dist_std", "first order",
+                                                     if_else(term == "I(MSP_dist_std^2)", "square",
+                                if_else(term=="TD_dist_std", "first order",
+                                    if_else(term=="I(TD_dist_std^2)", "square",
+                                        if_else(term=="MCMT_dist_std", "first order",
+                                            if_else(term=="I(MCMT_dist_std^2)", "square",
+                                                    if_else(term=="MWMT_dist_std", "first order",
+                                                         if_else(term=="I(MWMT_dist_std^2)", "square",
+                                                               if_else(term=="SHM_dist_std", "first order",
+                                                                   if_else(term=="I(SHM_dist_std^2)", "square","NA"))))))))))))))
+```
+
+## Plot
+```{r, echo=FALSE}
+pal6_t <- turbo(6, alpha=1, begin=0.2, end=1)
+
+fixed.eff.CI.simp <- fixed.eff.CI %>%
+  mutate(term.f = fct_relevel(term.simp, "Intercept", "MAT", "MCMT","MWMT","MSP", "SHM","TD")) %>%
+  mutate(Indicator.f = fct_relevel(Indicator, "Bacterial galls","Pitch streaming on bole","Sunken bole", "Top dieback", "Tip dieback","Branch dieback","Crown sparseness" ,"Chlorosis"))
+
+
+(CoefPlot_redone<-fixed.eff.CI.simp %>% filter(term.f !="Intercept") %>% 
+              ggplot(aes(estimate, Indicator.f, color=term.f, xmin=conf.low,xmax = conf.high)) + 
+        geom_point(aes(pch=order),position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+    theme_classic()+
+    geom_errorbar(aes(linetype=order),position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y ="", shape="Term",linetype="Term")+
+      theme(legend.position = "right",
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=11),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size=12),
+        plot.title = element_text(size=10))+
+    scale_y_discrete(labels = c("Bacterial\ngalls", "Pitch\nstreaming\non bole", "Sunken\nbole","Top\ndieback","Tip\ndieback","Branch\ndieback", "Crown\nsparseness", "Chlorosis"))+
+   scale_color_manual("Climate\npredictor",values=pal6_t, labels = c('MAT', 'MCMT', 'MWMT', 'MSP','SHM','TD'))+
+  guides(colour = guide_legend(order = 1),
+         shape  = guide_legend(order = 2),
+         linetype= guide_legend(order = 2))+
+    annotate("text", x= -2, y = 8.5, label = "Figure 2", size=4))
+
+ggsave(CoefPlot_redone, file="Figure 2.png", dpi=1000, height=8, width=6)
+ggsave(CoefPlot_redone, file="Figure 2.eps", dpi=1000, height=8, width=6)
+```
+
+

@@ -1,0 +1,304 @@
+---
+title: "Foliage Disease Effects on Survival - Analysis and Figure"
+author: "Michelle C. Agne"
+date: "2026-06-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review / revision
+
+# Purpose and methods
+This script runs the analyses of past (2015) foliage disease effects on tree survival in the 2024 survey. Findings are shown in Figure 6 and Appendix Tables S9 and S10.
+
+We performed two separate analyses to assess Swiss Needle Cast (SNC) and Rhabocline effects separately. We subsetted the data used in each analysis set following methods used in Wilhelmi et al. (2017). For both sets of analyses we removed Evans Creek and Stone Nursery sites from the dataset as neither SNC nor Rhabdocline was observed at these sites. For the SNC analyses, all trees with less than one year of needle retention and severe Rhabdocline (over a rating of 2) were removed, as these trees could not be accurately assessed for SNC. The dataset for the Rhabdocline analyses included all live trees.
+
+
+To assess the effects of foliage disease on the response variable - probability of survival (assessed in 2024), we fit models that included the assessment of fungal prevalence for either SNC or Rhabdocline, continentality (TD) climatic transfer distance between the source region and planting site, and the interaction between transfer distance and fungal prevalence. This model structure is supported by past research that suggests that where a foliage disease causing fungus is prevalent, trees with a high fungal load do not necessarily see major growth impacts, but when sources are moved, a greater fungal load can have greater effects. 
+
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(glmmTMB)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(dotwhisker)
+```
+
+
+```{r, include=FALSE}
+# Read in data
+data <- read.csv("field_climate_08_23_w18_21_growth.csv", row.names=1, na.strings="NA")
+
+live_trees <- data %>% filter(TS==1|TS==2|TS==3) %>% 
+mutate(CC_CT_comb.f = as.factor(CC_CT_comb)) %>%
+  mutate(CT.f = as.factor(CT),
+         CC.f = as.factor(CC)) %>%
+   mutate(TopDB.f = as.factor(TopDB),
+          TopDB01.f = as.factor(TopDB01))%>%
+  mutate(TipDB.f = as.factor(TipDB),
+         TipDB01.f = as.factor(TipDB01)) %>%
+  mutate(BrDB.f = as.factor(BrDB),
+         BrDB01.f = as.factor(BrDB01)) %>%
+  mutate(SnkBl.f = as.factor(SnkBl),
+         SnkBl01.f = as.factor(SnkBl01)) %>%
+  mutate(PBl.f = as.factor(PBl),
+         PBl01.f = as.factor(PBl01)) %>%
+  mutate(Cankers.f = as.factor(Cankers),
+         Cankers01.f = as.factor(if_else(Cankers==0, 0,
+                             if_else(Cankers==1, 0, 1)))) %>%
+  mutate(Gall.f = as.factor(Gall))
+
+
+
+data_all_tmp <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, header=TRUE, na.strings="NA") %>%
+  mutate(LD = as.numeric(if_else(TS == 1, "1",
+                      if_else(TS == 2, "1",
+                              if_else(TS == 3, "1","0"))))) %>%
+  mutate(Site = as.factor(SITE_NAME))
+
+#Combined SNC_N and SNC_S, Rhab_N and Rhab_S - where two measures exist they are averaged, 
+  #otherwise the combined value is the same as the non NA measure (either N or S)
+```
+
+# Probability live in 2024
+## Swiss needle cast model
+### Data subset 
+```{r, include=FALSE}
+tmp<-data_all_tmp %>% filter(!is.na(SNC_NS_15)) %>% filter(!is.na(LD)) %>% 
+  filter(Site != "StoneNursery") %>% filter(Site != "EvansCreek") %>%filter(Rhab_NS_15<2) %>% filter(NeedRet_yrs_15 >1) %>%
+  mutate(LD.f = as.factor(LD))
+
+#Standardized predictors 
+tmp$TD_dist_std <- (tmp$TD_dist - mean(tmp$TD_dist))/(2*sd(tmp$TD_dist))
+tmp$SNC_NS_15_std <- (tmp$SNC_NS_15 - mean(tmp$SNC_NS_15))/(2*sd(tmp$SNC_NS_15))
+```
+
+### Model evaluation
+```{r, include=FALSE}
+#Standardized predictors for interpretation and creating Figure 6a 
+modSNC.LD <- glmmTMB(LD ~ SNC_NS_15_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp, family = binomial(link = "logit"))
+ modSNC.LD_simres <- simulateResiduals(modSNC.LD)
+ plot(modSNC.LD_simres, sub="modSNC.LD")
+ 
+
+ #Native units for creating Figure 6b
+modSNC.LDns <- glmmTMB(LD ~ SNC_NS_15* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp, family = binomial(link = "logit"))
+```
+
+### Model results
+Statistical output - reported in Tables S9 and S10
+```{r, echo=FALSE}
+summary(modSNC.LD)
+confint(modSNC.LD)
+```
+
+### Standardized coefficient plot - relative strength of model predictors
+Figure 6a
+```{r, echo=FALSE, warning=FALSE}
+LDSNC_df <- broom::tidy(modSNC.LD) |> filter(term != "(Intercept)") |>filter(term != "sd__(Intercept)") |> mutate(model = "Model 1")
+LDSNC<-dwplot(LDSNC_df)
+
+(CoefPlot_LDSNC<-LDSNC + geom_vline(xintercept=0,lty=2)+
+  theme_classic()+
+  labs(x = NULL,y =NULL)+
+  scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+    scale_x_continuous(limits=c(-1.6,1.1), breaks = c(-1.5,-1,-0.5,0,0.5,1))+
+  geom_segment(aes(x=conf.low,y=term,xend=conf.high,
+                   yend=term), colour="black", linewidth=1.2)+
+  geom_point(aes(x=estimate,y=term),colour="black",size=2)+
+      annotate("text", x= -1.2, y = 4.5, label = "Figure 6", size=4))
+```
+
+### Plots of single variables with others held at mean
+```{r, echo=FALSE, warning=FALSE}
+dfLDSNC_TD<-ggpredict(modSNC.LDns, terms = c(terms="TD_dist [all]"))
+dfLDSNC_SNC<-ggpredict(modSNC.LDns, terms = c(terms="SNC_NS_15 [all]"))
+
+ggplot(dfLDSNC_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (C)",y ="Probability live in 2024")+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 13.5),
+          legend.title = element_text(size= 13.5))+
+    theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) 
+
+ggplot(dfLDSNC_SNC, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Swiss needle cast severity",y ="Probability live in 2024")+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 13.5),
+          legend.title = element_text(size= 13.5))+
+    theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) 
+```
+
+### Prediction plot Figure 6b
+Probability of survival ~ continentality transfer distance at three different levels of past SNC severity
+```{r, echo=FALSE, warning=FALSE}
+mydfLD_SNC<-ggpredict(modSNC.LDns, terms = c("TD_dist [all]", "SNC_NS_15 [1, 2, 3]"))
+print(mydfLD_SNC, n=60)
+
+palSNC <- c ("#17A77EFF", "#82CC6CFF","#EDEF5CFF")
+
+(pLDSNC<-ggplot(mydfLD_SNC, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high")) +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high")) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of survival")+
+   theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+## Rhabdocline model
+```{r, include=FALSE}
+rhab<-data_all_tmp %>% filter(!is.na(Rhab_NS_15)) %>% filter(!is.na(LD)) %>% 
+   filter(!is.na(NeedRet_yrs_15)) %>%
+  filter(Site != "StoneNursery") %>% filter(Site != "EvansCreek") %>% 
+  mutate(LD.f = as.factor(LD))
+
+rhab$TD_dist_std <- (rhab$TD_dist - mean(rhab$TD_dist))/(2*sd(rhab$TD_dist))
+rhab$Rhab_NS_15_std <- (rhab$Rhab_NS_15 - mean(rhab$Rhab_NS_15))/(2*sd(rhab$Rhab_NS_15))
+```
+
+### Model
+```{r, include=FALSE}
+#Standardized predictors for interpretation and creating Figure 6c 
+modRhab.LD <- glmmTMB(LD ~ Rhab_NS_15_std* TD_dist_std+ I(TD_dist_std^2) +(1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = rhab, family = binomial(link = "logit"))
+modRhab.LD_simres <- simulateResiduals(modRhab.LD)
+ plot(modRhab.LD_simres, sub="modRhab.LD")#
+ testOutliers(modRhab.LD_simres, type="bootstrap")
+
+modRhab.LD_ns <- glmmTMB(LD ~ Rhab_NS_15* TD_dist+ I(TD_dist^2) +(1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = rhab, family = binomial(link = "logit")) 
+```
+
+### Model results
+Statistical output - reported in Tables S9 and S10
+```{r, echo=FALSE}
+ summary(modRhab.LD)
+confint(modRhab.LD)
+```
+
+### Standardized coefficient plot - relative strength of model predictors
+Figure 6c
+```{r, echo=FALSE, warning=FALSE}
+LDrhab_df <- broom::tidy(modRhab.LD) |> filter(term != "(Intercept)") |>filter(term != "sd__(Intercept)") |> mutate(model = "Model 1")
+LDrhab<-dwplot(LDrhab_df)
+
+(CoefPlot_LDrhab<-LDrhab + geom_vline(xintercept=0,lty=2)+
+  theme_classic()+
+  labs(x = "Standardized coefficient",y =NULL)+
+  scale_y_discrete(labels = c('Rhabdocline\nseverity *\nContinentality',  expression(paste("Continentality"^"2")),'Continentality','Rhabdocline\nseverity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+     scale_x_continuous(limits=c(-1.6,1.1), breaks = c(-1.5,-1,-0.5,0,0.5,1))+
+  geom_segment(aes(x=conf.low,y=term,xend=conf.high,
+                   yend=term), colour="black", linewidth=1.2)+
+  geom_point(aes(x=estimate,y=term),colour="black",size=2))
+```
+
+### Plots of single variables with others held at mean
+```{r, echo=FALSE, warning=FALSE}
+dfLDrhab_TD<-ggpredict(modRhab.LD_ns, terms = c(terms="TD_dist [all]"))
+dfLDrhab_Rhab<-ggpredict(modRhab.LD_ns, terms = c(terms="Rhab_NS_15 [all]"))
+
+ggplot(dfLDrhab_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (C)",y ="Probability live in 2024")+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 13.5),
+          legend.title = element_text(size= 13.5))+
+    theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) 
+
+ggplot(dfLDrhab_Rhab, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Rhabdocline severity",y ="Probability live in 2024")+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 13.5),
+          legend.title = element_text(size= 13.5))+
+    theme(axis.text.x = element_text(size=12),
+          axis.text.y = element_text(size=12),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) 
+```
+
+### Prediction plot Figure 6d
+Probability of survival ~ continentality transfer distance at three different levels of past Rhabdocline severity
+```{r, echo=FALSE, warning=FALSE}
+mydfLD_rhab<-ggpredict(modRhab.LD_ns, terms = c("TD_dist [all]", "Rhab_NS_15 [0, 1.5, 3]"))
+print(mydfLD_rhab, n=50)
+
+palRhab <- c("#26A63AFF", "#9BB306FF", "#E1BB4EFF")
+
+(pLDrhab<-ggplot(mydfLD_rhab, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("Rhabdocline\nseverity",values=palRhab, labels=c("none","moderate", "high")) +
+    scale_fill_manual("Rhabdocline\nseverity",values=palRhab, labels=c("none","moderate", "high")) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",y ="Probability of survival")+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+## Arrange Multipanel Figure 6
+```{r, echo=FALSE}
+Surv_FolDis <- (CoefPlot_LDSNC|pLDSNC)/ (CoefPlot_LDrhab|pLDrhab)
+Surv_FolDis_ann_pt <-Surv_FolDis + plot_annotation(tag_levels = c("a"))
+
+ggsave(Surv_FolDis_ann_pt, file="Figure6.png", dpi=600, height=7.08, width=7.08)
+ggsave(Surv_FolDis_ann_pt, file="Figure6.eps", dpi=600, height=7.08, width=7.08)
+```

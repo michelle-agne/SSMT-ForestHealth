@@ -1,0 +1,152 @@
+---
+title: "SSMT Tree Health Indicator Effects on Growth"
+author: "Michelle C. Agne"
+date: "2026-06-01"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review / revision
+
+# Purpose and methods
+This script runs analyses for the effects of tree health indicators (collected in summer 2024) on tree growth response variables. Results are presented in Figure 5 and Appendix Tables S7 and S8.
+
+We assessed these relationships at the individual tree level. All tree health indicators were used as predictor variables. Crown color and crown transparency were used in their native format (three and four severity categories, respectively). Due to relative rarity of observance tip dieback, lateral branch dieback, top dieback, sunken bole, pitch streaming on bole, and bacterial galls were treated as binary (presence/absence) variables. Resulting models assessed 2018-2021 DBH growth and height growth as response variables and were fit with a scaled t distribution and identity link. Models were fit with nested random effects of Plot within Block within Site and seed source region.
+
+Note that we did not evaluate different subsets of predictor variables for these models.
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(glmmTMB)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(dotwhisker)
+```
+
+
+```{r, include=FALSE}
+# Read in data
+live_trees_w_homesource <- read.csv("live_trees_w_homesource.csv", row.names=1, na.strings="NA")%>%
+  mutate(CT.f = as.factor(CT),
+         CC.f = as.factor(CC)) %>%
+   mutate(TopDB01.f = as.factor(TopDB01))%>%
+  mutate(TipDB01.f = as.factor(TipDB01)) %>%
+  mutate(BrDB01.f = as.factor(BrDB01)) %>%
+  mutate(SnkBl01.f = as.factor(SnkBl01)) %>%
+  mutate(PBl01.f = as.factor(PBl01)) %>%
+  mutate(Gall.f = as.factor(Gall)) %>%
+  mutate(DBH21_cm = DBH21/10,
+         HT21_m = HT21/100,
+         dbh_grth_18_21_cm = dbh_grth_18_21/10,
+         ht_grth_18_21_m = ht_grth_18_21/100)
+```
+
+
+
+## 2018 - 2021 DBH growth model
+Statistical results shown in Table S7-S8
+```{r, echo=FALSE}
+
+#Null model
+  mod_sev_dbhgNULL <- glmmTMB(dbh_grth_18_21_cm ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), t_family(link = "identity"), disp=~SITE_NAME,  data=live_trees_w_homesource) 
+summary(mod_sev_dbhgNULL)
+
+#Model with tree health indicators as fixed effects
+  mod_sev_dbhg2 <- glmmTMB(dbh_grth_18_21_cm ~ CC.f + CT.f + BrDB01.f + TipDB01.f + TopDB01.f + SnkBl01.f + PBl01.f + Gall.f +  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), t_family(link = "identity"), disp=~SITE_NAME,  data=live_trees_w_homesource) 
+ 
+
+ summary(mod_sev_dbhg2)
+ confint(mod_sev_dbhg2)
+```
+
+### Coefficient plot - relative strength of model predictors
+Figure 5a
+</br>
+```{r, echo=FALSE, warning=FALSE}
+dbhg_df <- broom::tidy(mod_sev_dbhg2) |> filter(term != "(Intercept)") |>filter(term != "sd__(Intercept)") |> mutate(model = "Model 1")
+dbhg<-dwplot(dbhg_df)
+
+
+(CoefPlot_dbhg<-dbhg + geom_vline(xintercept=0,lty=2)+
+  theme_classic()+
+  labs(x = "Difference from mean 2018 - 2021 diameter growth increment (cm)",y ="")+
+  scale_y_discrete(labels = c('Bacterial galls','Pitch streaming - on bole','Sunken bole','Top dieback', 'Tip dieback','Branch dieback','Sparse crown - severe', 'Sparse crown - moderate', 'Sparse crown - light','Chlorosis - severe','Chlorosis - moderate'))+
+     scale_x_continuous(limits=c(-2.5,0.6), breaks= c(-2.5,-2,-1.5,-1,-0.5,0,0.5))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10.5),
+        axis.text.y = element_text(size=10.5),
+        axis.title.x = element_text(size=11.5),
+        axis.title.y = element_text(size=10))+
+  geom_segment(aes(x=conf.low,y=term,xend=conf.high,
+                   yend=term), colour="black", linewidth=1.2)+
+  geom_point(aes(x=estimate,y=term),colour="black",size=2)+
+        annotate("text", x = -2.3, y = 11.3, size=4, label = "Figure 5"))
+```
+
+
+##  2018 - 2021 Height growth model
+Statistical results shown in Table S7-S8
+```{r, echo=FALSE}
+#Null model
+mod_sev_htgNULL <- glmmTMB(ht_grth_18_21_m ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), t_family(link = "identity"),  disp=~SITE_NAME,  data=live_trees_w_homesource) 
+summary(mod_sev_htgNULL)
+
+#Model with tree health indicators
+mod_sev_htg <- glmmTMB(ht_grth_18_21_m ~ CC.f + CT.f + BrDB01.f + TipDB01.f + TopDB01.f + SnkBl01.f + PBl01.f + Gall.f +  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), t_family(link = "identity"),  disp=~SITE_NAME,  data=live_trees_w_homesource) 
+
+
+summary(mod_sev_htg)
+confint(mod_sev_htg)
+```
+
+
+### Coefficient plot - relative strength of model predictors
+Figure 5b
+```{r, echo=FALSE, warning=FALSE}
+htg_df <- broom::tidy(mod_sev_htg) |> filter(term != "(Intercept)") |>filter(term != "sd__(Intercept)") |> mutate(model = "Model 1")
+htg<-dwplot(htg_df)
+
+
+(CoefPlot_htg<-htg + geom_vline(xintercept=0,lty=2)+
+  theme_classic()+
+  labs(x = "Difference from mean 2018 - 2021 height growth increment (m)",y ="")+
+  scale_y_discrete(labels = c('Bacterial galls','Pitch streaming - on bole','Sunken bole','Top dieback', 'Tip dieback','Branch dieback','Sparse crown - severe', 'Sparse crown - moderate', 'Sparse crown - light','Chlorosis - severe','Chlorosis - moderate'))+
+    scale_x_continuous(limits=c(-1,0.23))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10.5),
+        axis.text.y = element_text(size=10.5),
+        axis.title.x = element_text(size=11.5),
+        axis.title.y = element_text(size=10))+
+  geom_segment(aes(x=conf.low,y=term,xend=conf.high,
+                   yend=term), colour="black", linewidth=1.2)+
+  geom_point(aes(x=estimate,y=term),colour="black",size=2))
+```
+
+
+## Multipanel coefficient plot
+```{r, echo=FALSE}
+GrowthIncMult<- CoefPlot_dbhg/CoefPlot_htg
+GrowthIncMult_ann<-GrowthIncMult + plot_annotation(tag_levels = c("a"))
+
+ggsave(GrowthIncMult_ann, file="Figure5.png", dpi=600, height=8.6, width=7)
+ggsave(GrowthIncMult_ann, file="Figure5.eps", dpi=600, height=8.6, width=7)
+```

@@ -1,0 +1,485 @@
+---
+title: "SSMT Chi Squares of Indicators by Site and Provenance"
+author: "Michelle C. Agne"
+date: "2026-06-02"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review / revision
+
+# Purpose and methods
+Assess distribution of tree health indicator values by site and regional provenance through chi square tests to determine whether distribution of severity differs by site or source, and relative contributions of each severity class by site, source for each of eight indicators. Results provided in Tables S3-S4.
+
+
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+```
+
+# Read in data
+```{r, include=FALSE}
+field_data <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv",row.names=1,header=TRUE, na.strings="NA")
+```
+
+# Subset data 
+live only
+```{r}
+field_data_live <- field_data %>% filter(TS =="1"|TS=="2"|TS=="3") 
+# use this subset for chlorosis, crown sparseness, branch dieback, tip dieback, top dieback
+```
+
+all assessed trees
+```{r}
+field_data_allassess <- field_data %>%   filter(Assessed =="1")
+# use this subset for sunken bole, pitch streaming on bole, bacterial galls
+```
+
+
+# Chi square tests
+## Chlorosis
+### By regional provenance
+```{r, echo=FALSE}
+cc_tab <- field_data_live %>% filter(!is.na(CC)) # remove any trees with missing chlorosis assessment 
+
+cc_tab_R <- table(cc_tab$REGION, cc_tab$CC) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_CC_R<-chisq.test(cc_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(CC_R_observed_counts <- chisq_CC_R$observed)
+CC_R_expected_counts <- chisq_CC_R$expected
+print(round(CC_R_expected_counts, 1))
+CC_R_pearson_residuals <- chisq_CC_R$residuals
+print(round(CC_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+CC_R_contributions <- (CC_R_observed_counts - CC_R_expected_counts)^2 / CC_R_expected_counts
+
+# Calculate percentage contributions
+CC_R_total_chi_square <- chisq_CC_R$statistic
+CC_R_percentage_contributions <- 100 * CC_R_contributions / CC_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(CC_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+cc_tab_S <- table(cc_tab$SITE_NAME, cc_tab$CC) # contingency table
+(chisq_CC_S<-chisq.test(cc_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(CC_S_observed_counts <- chisq_CC_S$observed)
+CC_S_expected_counts <- chisq_CC_S$expected
+print(round(CC_S_expected_counts, 1))
+CC_S_pearson_residuals <- chisq_CC_S$residuals
+print(round(CC_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+CC_S_contributions <- (CC_S_observed_counts - CC_S_expected_counts)^2 / CC_S_expected_counts
+
+# Calculate percentage contributions
+CC_S_total_chi_square <- chisq_CC_S$statistic
+CC_S_percentage_contributions <- 100 * CC_S_contributions / CC_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(CC_S_percentage_contributions, 2)) # Table S4
+```
+
+
+
+## Crown sparseness
+### By regional provenance
+```{r, echo=FALSE}
+CT_tab <- field_data_live %>% filter(!is.na(CT)) # remove any trees with missing crown sparseness assessment 
+
+CT_tab_R <- table(CT_tab$REGION, CT_tab$CT) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_CT_R<-chisq.test(CT_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(CT_R_observed_counts <- chisq_CT_R$observed)
+CT_R_expected_counts <- chisq_CT_R$expected
+print(round(CT_R_expected_counts, 1))
+CT_R_pearson_residuals <- chisq_CT_R$residuals
+print(round(CT_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+CT_R_contributions <- (CT_R_observed_counts - CT_R_expected_counts)^2 / CT_R_expected_counts
+
+# Calculate percentage contributions
+CT_R_total_chi_square <- chisq_CT_R$statistic
+CT_R_percentage_contributions <- 100 * CT_R_contributions / CT_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(CT_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+CT_tab_S <- table(CT_tab$SITE_NAME, CT_tab$CT) # contingency table
+(chisq_CT_S<-chisq.test(CT_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(CT_S_observed_counts <- chisq_CT_S$observed)
+CT_S_expected_counts <- chisq_CT_S$expected
+print(round(CT_S_expected_counts, 1))
+CT_S_pearson_residuals <- chisq_CT_S$residuals
+print(round(CT_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+CT_S_contributions <- (CT_S_observed_counts - CT_S_expected_counts)^2 / CT_S_expected_counts
+
+# Calculate percentage contributions
+CT_S_total_chi_square <- chisq_CT_S$statistic
+CT_S_percentage_contributions <- 100 * CT_S_contributions / CT_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(CT_S_percentage_contributions, 2)) # Table S4
+```
+
+## Branch dieback
+### By regional provenance
+```{r, echo=FALSE}
+BrDB_tab <- field_data_live %>% filter(!is.na(BrDB)) # remove any trees with missing branch dieback assessment 
+
+BrDB_tab_R <- table(BrDB_tab$REGION, BrDB_tab$BrDB) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_BrDB_R<-chisq.test(BrDB_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(BrDB_R_observed_counts <- chisq_BrDB_R$observed)
+BrDB_R_expected_counts <- chisq_BrDB_R$expected
+print(round(BrDB_R_expected_counts, 1))
+BrDB_R_pearson_residuals <- chisq_BrDB_R$residuals
+print(round(BrDB_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+BrDB_R_contributions <- (BrDB_R_observed_counts - BrDB_R_expected_counts)^2 / BrDB_R_expected_counts
+
+# Calculate percentage contributions
+BrDB_R_total_chi_square <- chisq_BrDB_R$statistic
+BrDB_R_percentage_contributions <- 100 * BrDB_R_contributions / BrDB_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(BrDB_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+BrDB_tab_S <- table(BrDB_tab$SITE_NAME, BrDB_tab$BrDB) # contingency table
+(chisq_BrDB_S<-chisq.test(BrDB_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(BrDB_S_observed_counts <- chisq_BrDB_S$observed)
+BrDB_S_expected_counts <- chisq_BrDB_S$expected
+print(round(BrDB_S_expected_counts, 1))
+BrDB_S_pearson_residuals <- chisq_BrDB_S$residuals
+print(round(BrDB_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+BrDB_S_contributions <- (BrDB_S_observed_counts - BrDB_S_expected_counts)^2 / BrDB_S_expected_counts
+
+# Calculate percentage contributions
+BrDB_S_total_chi_square <- chisq_BrDB_S$statistic
+BrDB_S_percentage_contributions <- 100 * BrDB_S_contributions / BrDB_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(BrDB_S_percentage_contributions, 2)) # Table S4
+```
+
+## Tip dieback
+### By regional provenance
+```{r, echo=FALSE}
+TipDB_tab <- field_data_live %>% filter(!is.na(TipDB)) # remove any trees with missing tip dieback assessment 
+
+TipDB_tab_R <- table(TipDB_tab$REGION, TipDB_tab$TipDB) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_TipDB_R<-chisq.test(TipDB_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(TipDB_R_observed_counts <- chisq_TipDB_R$observed)
+TipDB_R_expected_counts <- chisq_TipDB_R$expected
+print(round(TipDB_R_expected_counts, 1))
+TipDB_R_pearson_residuals <- chisq_TipDB_R$residuals
+print(round(TipDB_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+TipDB_R_contributions <- (TipDB_R_observed_counts - TipDB_R_expected_counts)^2 / TipDB_R_expected_counts
+
+# Calculate percentage contributions
+TipDB_R_total_chi_square <- chisq_TipDB_R$statistic
+TipDB_R_percentage_contributions <- 100 * TipDB_R_contributions / TipDB_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(TipDB_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+TipDB_tab_S <- table(TipDB_tab$SITE_NAME, TipDB_tab$TipDB) # contingency table
+(chisq_TipDB_S<-chisq.test(TipDB_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(TipDB_S_observed_counts <- chisq_TipDB_S$observed)
+TipDB_S_expected_counts <- chisq_TipDB_S$expected
+print(round(TipDB_S_expected_counts, 1))
+TipDB_S_pearson_residuals <- chisq_TipDB_S$residuals
+print(round(TipDB_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+TipDB_S_contributions <- (TipDB_S_observed_counts - TipDB_S_expected_counts)^2 / TipDB_S_expected_counts
+
+# Calculate percentage contributions
+TipDB_S_total_chi_square <- chisq_TipDB_S$statistic
+TipDB_S_percentage_contributions <- 100 * TipDB_S_contributions / TipDB_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(TipDB_S_percentage_contributions, 2)) # Table S4
+```
+
+
+## Top dieback
+### By regional provenance
+```{r, echo=FALSE}
+TopDB_tab <- field_data_live %>% filter(!is.na(TopDB)) # remove any trees with missing top dieback assessment 
+
+TopDB_tab_R <- table(TopDB_tab$REGION, TopDB_tab$TopDB) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_TopDB_R<-chisq.test(TopDB_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(TopDB_R_observed_counts <- chisq_TopDB_R$observed)
+TopDB_R_expected_counts <- chisq_TopDB_R$expected
+print(round(TopDB_R_expected_counts, 1))
+TopDB_R_pearson_residuals <- chisq_TopDB_R$residuals
+print(round(TopDB_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+TopDB_R_contributions <- (TopDB_R_observed_counts - TopDB_R_expected_counts)^2 / TopDB_R_expected_counts
+
+# Calculate percentage contributions
+TopDB_R_total_chi_square <- chisq_TopDB_R$statistic
+TopDB_R_percentage_contributions <- 100 * TopDB_R_contributions / TopDB_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(TopDB_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+TopDB_tab_S <- table(TopDB_tab$SITE_NAME, TopDB_tab$TopDB) # contingency table
+(chisq_TopDB_S<-chisq.test(TopDB_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(TopDB_S_observed_counts <- chisq_TopDB_S$observed)
+TopDB_S_expected_counts <- chisq_TopDB_S$expected
+print(round(TopDB_S_expected_counts, 1))
+TopDB_S_pearson_residuals <- chisq_TopDB_S$residuals
+print(round(TopDB_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+TopDB_S_contributions <- (TopDB_S_observed_counts - TopDB_S_expected_counts)^2 / TopDB_S_expected_counts
+
+# Calculate percentage contributions
+TopDB_S_total_chi_square <- chisq_TopDB_S$statistic
+TopDB_S_percentage_contributions <- 100 * TopDB_S_contributions / TopDB_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(TopDB_S_percentage_contributions, 2)) # Table S4
+```
+
+## Sunken bole
+### By regional provenance
+```{r, echo=FALSE}
+SnkBl_tab <- field_data_allassess %>% filter(!is.na(SnkBl)) # remove any trees with missing sunken bole assessment 
+
+SnkBl_tab_R <- table(SnkBl_tab$REGION, SnkBl_tab$SnkBl) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_SnkBl_R<-chisq.test(SnkBl_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(SnkBl_R_observed_counts <- chisq_SnkBl_R$observed)
+SnkBl_R_expected_counts <- chisq_SnkBl_R$expected
+print(round(SnkBl_R_expected_counts, 1))
+SnkBl_R_pearson_residuals <- chisq_SnkBl_R$residuals
+print(round(SnkBl_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+SnkBl_R_contributions <- (SnkBl_R_observed_counts - SnkBl_R_expected_counts)^2 / SnkBl_R_expected_counts
+
+# Calculate percentage contributions
+SnkBl_R_total_chi_square <- chisq_SnkBl_R$statistic
+SnkBl_R_percentage_contributions <- 100 * SnkBl_R_contributions / SnkBl_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(SnkBl_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+SnkBl_tab_S <- table(SnkBl_tab$SITE_NAME, SnkBl_tab$SnkBl) # contingency table
+(chisq_SnkBl_S<-chisq.test(SnkBl_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(SnkBl_S_observed_counts <- chisq_SnkBl_S$observed)
+SnkBl_S_expected_counts <- chisq_SnkBl_S$expected
+print(round(SnkBl_S_expected_counts, 1))
+SnkBl_S_pearson_residuals <- chisq_SnkBl_S$residuals
+print(round(SnkBl_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+SnkBl_S_contributions <- (SnkBl_S_observed_counts - SnkBl_S_expected_counts)^2 / SnkBl_S_expected_counts
+
+# Calculate percentage contributions
+SnkBl_S_total_chi_square <- chisq_SnkBl_S$statistic
+SnkBl_S_percentage_contributions <- 100 * SnkBl_S_contributions / SnkBl_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(SnkBl_S_percentage_contributions, 2)) # Table S4
+```
+
+
+## Pitch streaming on bole
+### By regional provenance
+```{r, echo=FALSE}
+PBl_tab <- field_data_allassess %>% filter(!is.na(PBl)) # remove any trees with missing pitch streaming on bole assessment 
+
+PBl_tab_R <- table(PBl_tab$REGION, PBl_tab$PBl) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_PBl_R<-chisq.test(PBl_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(PBl_R_observed_counts <- chisq_PBl_R$observed)
+PBl_R_expected_counts <- chisq_PBl_R$expected
+print(round(PBl_R_expected_counts, 1))
+PBl_R_pearson_residuals <- chisq_PBl_R$residuals
+print(round(PBl_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+PBl_R_contributions <- (PBl_R_observed_counts - PBl_R_expected_counts)^2 / PBl_R_expected_counts
+
+# Calculate percentage contributions
+PBl_R_total_chi_square <- chisq_PBl_R$statistic
+PBl_R_percentage_contributions <- 100 * PBl_R_contributions / PBl_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(PBl_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+PBl_tab_S <- table(PBl_tab$SITE_NAME, PBl_tab$PBl) # contingency table
+(chisq_PBl_S<-chisq.test(PBl_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(PBl_S_observed_counts <- chisq_PBl_S$observed)
+PBl_S_expected_counts <- chisq_PBl_S$expected
+print(round(PBl_S_expected_counts, 1))
+PBl_S_pearson_residuals <- chisq_PBl_S$residuals
+print(round(PBl_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+PBl_S_contributions <- (PBl_S_observed_counts - PBl_S_expected_counts)^2 / PBl_S_expected_counts
+
+# Calculate percentage contributions
+PBl_S_total_chi_square <- chisq_PBl_S$statistic
+PBl_S_percentage_contributions <- 100 * PBl_S_contributions / PBl_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(PBl_S_percentage_contributions, 2)) # Table S4
+```
+
+
+## Galls
+### By regional provenance
+```{r, echo=FALSE}
+Gall_tab <- field_data_allassess %>% filter(!is.na(Gall)) # remove any trees with missing gall assessment 
+
+Gall_tab_R <- table(Gall_tab$REGION, Gall_tab$Gall) # contingency table
+
+# Chisquare test of homogeneity
+(chisq_Gall_R<-chisq.test(Gall_tab_R))# Table S3
+
+
+# Observed vs expected counts and residuals
+(Gall_R_observed_counts <- chisq_Gall_R$observed)
+Gall_R_expected_counts <- chisq_Gall_R$expected
+print(round(Gall_R_expected_counts, 1))
+Gall_R_pearson_residuals <- chisq_Gall_R$residuals
+print(round(Gall_R_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+Gall_R_contributions <- (Gall_R_observed_counts - Gall_R_expected_counts)^2 / Gall_R_expected_counts
+
+# Calculate percentage contributions
+Gall_R_total_chi_square <- chisq_Gall_R$statistic
+Gall_R_percentage_contributions <- 100 * Gall_R_contributions / Gall_R_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(Gall_R_percentage_contributions, 2)) # Table S4
+```
+
+### By site
+```{r, echo=FALSE}
+Gall_tab_S <- table(Gall_tab$SITE_NAME, Gall_tab$Gall) # contingency table
+(chisq_Gall_S<-chisq.test(Gall_tab_S))# Table S3
+
+# Observed vs expected counts and residuals
+(Gall_S_observed_counts <- chisq_Gall_S$observed)
+Gall_S_expected_counts <- chisq_Gall_S$expected
+print(round(Gall_S_expected_counts, 1))
+Gall_S_pearson_residuals <- chisq_Gall_S$residuals
+print(round(Gall_S_pearson_residuals, 2))
+
+# Calculate contribution to chi-square statistic
+Gall_S_contributions <- (Gall_S_observed_counts - Gall_S_expected_counts)^2 / Gall_S_expected_counts
+
+# Calculate percentage contributions
+Gall_S_total_chi_square <- chisq_Gall_S$statistic
+Gall_S_percentage_contributions <- 100 * Gall_S_contributions / Gall_S_total_chi_square
+
+# Print percentage contributions
+print("Percentage Contributions:")
+print(round(Gall_S_percentage_contributions, 2)) # Table S4
+```

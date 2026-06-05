@@ -1,0 +1,613 @@
+---
+title: "SSMT Tree Health Indicators by Source and Site"
+author: "Michelle C. Agne"
+date: "2026-06-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review/revision
+
+# Purpose
+Wrangle tree health indicator data by site and regional provenance to present proportion of trees in each site x provenance combination with each severity level of the eight indicators (Appendix Figures S1-S8)
+
+Table 2: Calculate the proportion of trees with each indicator by site, then by regional provenance
+Table 3: Calculate the proportion of trees with each indicator by site and regional provenance combination 
+  -proportion of trees from the local source with each indicator shown by site with range by provenance (min and max) shown by site and indicator
+  -List of sites followed by their local provenance:
+    - Floras - ORCSTS
+    - Stone Nursery - ORSISL
+    - Evans Creek - ORSISH
+    - Nortons - ORCSTN
+    - Slice Butte - ORCASL
+    - Soda320 - ORCASH
+    - Jammer3 - WACST
+    - Buckhorn2 - WACASL
+    - Doorstop - WACASH
+    Note that sources CACST, CAKLA, CASIERRA do not have a local site in the experiment
+
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(knitr)
+library(patchwork)
+```
+
+
+```{r, include=FALSE}
+# Read in data
+data <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, header=TRUE, na.strings="NA") 
+```
+
+# Table 2
+## By site
+### Chlorosis
+```{r, echo=FALSE}
+CC_site<-data %>% filter(!is.na(CC)) %>%group_by(SITE_NAME, CC) %>% summarize(total = sum(count)) %>%
+  pivot_wider(names_from = CC, names_prefix = "CC_", values_from = total, values_fill = 0) %>%
+  mutate(CCTrees = CC_1 + CC_2 + CC_3) %>%
+  mutate(Prop_CC1 = round(CC_1/CCTrees, digits=3),
+         Prop_CC2 = round(CC_2/CCTrees, digits=3),
+         Prop_CC3 = round(CC_3/CCTrees, digits=3))%>%
+  mutate(Prop_CC23 = Prop_CC2 + Prop_CC3) # this column contains the values for the Chlorosis column
+```
+
+### Crown sparseness
+```{r, echo=FALSE}
+CT_site <- data %>% filter(!is.na(CT)) %>%group_by(SITE_NAME, CT) %>% summarize(total = sum(count)) %>%
+  pivot_wider(names_from = CT, names_prefix = "CT_", values_from = total, values_fill = 0) %>%
+  mutate(CTTrees = CT_1 + CT_2 + CT_3 + CT_4) %>%
+  mutate(Prop_CT1 = round(CT_1/CTTrees, digits=3),
+         Prop_CT2 = round(CT_2/CTTrees, digits=3),
+         Prop_CT3 = round(CT_3/CTTrees, digits=3),
+         Prop_CT4 = round(CT_4/CTTrees, digits=3))%>%
+  mutate(Prop_CT234 = Prop_CT2 + Prop_CT3+Prop_CT4) # this column contains the values for the Sparse crown column
+```
+
+### Branch dieback
+```{r, echo=FALSE}
+BrDB_site <- data %>% filter(!is.na(BrDB)) %>%group_by(SITE_NAME, BrDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = BrDB, names_prefix = "BrDB_", values_from = total, values_fill = 0)%>%
+  mutate(BrDBtrees = BrDB_0 + BrDB_1 + BrDB_2)%>%
+  mutate(Prop_BrDB0 = round(BrDB_0/BrDBtrees, digits=3),
+         Prop_BrDB1 = round(BrDB_1/BrDBtrees, digits=3),
+         Prop_BrDB2 = round(BrDB_2/BrDBtrees, digits=3))%>%
+  mutate(Prop_BrDB12 = Prop_BrDB1 + Prop_BrDB2)# this column contains the values for the Branch dieback column
+```
+
+### Top dieback
+```{r, echo=FALSE}
+TopDB_site <- data %>% filter(!is.na(TopDB))%>% group_by(SITE_NAME, TopDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = TopDB, names_prefix = "TopDB_", values_from = total, values_fill = 0) %>%
+  mutate(TopDBtrees = TopDB_0 + TopDB_1 + TopDB_2 + TopDB_3) %>%
+  mutate(Prop_TopDB0 = round(TopDB_0/TopDBtrees, digits=3),
+        Prop_TopDB1 = round(TopDB_1/TopDBtrees, digits=3),
+         Prop_TopDB2 = round(TopDB_2/TopDBtrees, digits=3),
+         Prop_TopDB3 = round(TopDB_3/TopDBtrees, digits=3)) %>%
+  mutate(Prop_TopDB123 = Prop_TopDB1 + Prop_TopDB2 + Prop_TopDB3) # this column contains the values for the top dieback column
+```
+
+### Tip dieback
+```{r, echo=FALSE}
+TipDB_site <- data%>% filter(!is.na(TipDB)) %>% group_by(SITE_NAME,TipDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = TipDB, names_prefix = "TipDB_", values_from = total, values_fill = 0) %>%
+  mutate(TipDBtrees = TipDB_0 + TipDB_1 + TipDB_2)%>%
+  mutate(Prop_TipDB0 = round(TipDB_0/TipDBtrees, digits=3),
+         Prop_TipDB1 = round(TipDB_1/TipDBtrees, digits=3),
+         Prop_TipDB2 = round(TipDB_2/TipDBtrees, digits=3))%>%
+  mutate(Prop_TipDB12 = Prop_TipDB1 + Prop_TipDB2) # this column contains the values for the tip dieback column
+```
+
+### Sunken bole
+```{r, echo=FALSE}
+SnkBl_site <- data %>% filter(!is.na(SnkBl)) %>% group_by(SITE_NAME,SnkBl) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = SnkBl, names_prefix = "SnkBl_", values_from = total, values_fill = 0) %>%
+  mutate(SnkBltrees = SnkBl_0 + SnkBl_1 + SnkBl_2)%>%
+  mutate(Prop_SnkBl0 = round(SnkBl_0/SnkBltrees, digits=3),
+         Prop_SnkBl1 = round(SnkBl_1/SnkBltrees, digits=3),
+         Prop_SnkBl2 = round(SnkBl_2/SnkBltrees, digits=3))%>%
+  mutate(Prop_SnkBl12 = Prop_SnkBl1 + Prop_SnkBl2)  # this column contains the values for the sunken bole column
+```
+
+### Pitching on bole
+```{r, echo=FALSE}
+PBl_site <- data%>% filter(!is.na(PBl))  %>% group_by(SITE_NAME,PBl) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = PBl, names_prefix = "PBl_", values_from = total, values_fill = 0)%>%
+  mutate(PBltrees = PBl_0 + PBl_1 + PBl_2)%>%
+  mutate(Prop_PBl0 = round(PBl_0/PBltrees, digits=3),
+         Prop_PBl1 = round(PBl_1/PBltrees, digits=3),
+         Prop_PBl2 = round(PBl_2/PBltrees, digits=3))%>%
+  mutate(Prop_PBl12 = Prop_PBl1 + Prop_PBl2)# this column contains the values for the pitching on bole column
+```
+
+### Bacterial galls
+```{r, echo=FALSE}
+Gall_site <- data %>% filter(!is.na(Gall)) %>% group_by(SITE_NAME, Gall) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = Gall, names_prefix = "Gall_", values_from = total, values_fill = 0)%>%
+  mutate(Galltrees = Gall_0 + Gall_1)%>%
+  mutate(Prop_Gall0 = round(Gall_0/Galltrees, digits=3),
+         Prop_Gall1 = round(Gall_1/Galltrees, digits=3)) # this column contains the values for the bacterial galls column
+```
+
+## By regional provenance
+### Chlorosis
+```{r, echo=FALSE}
+CC_reg<-data %>% filter(!is.na(CC)) %>%group_by(REGION, CC) %>% summarize(total = sum(count)) %>%
+  pivot_wider(names_from = CC, names_prefix = "CC_", values_from = total, values_fill = 0) %>%
+  mutate(CCTrees = CC_1 + CC_2 + CC_3) %>%
+  mutate(Prop_CC1 = round(CC_1/CCTrees, digits=3),
+         Prop_CC2 = round(CC_2/CCTrees, digits=3),
+         Prop_CC3 = round(CC_3/CCTrees, digits=3))%>%
+  mutate(Prop_CC23 = Prop_CC2 + Prop_CC3) # this column contains the values for the Chlorosis column
+```
+
+### Crown sparseness
+```{r, echo=FALSE}
+CT_reg <- data %>% filter(!is.na(CT)) %>%group_by(REGION, CT) %>% summarize(total = sum(count)) %>%
+  pivot_wider(names_from = CT, names_prefix = "CT_", values_from = total, values_fill = 0) %>%
+  mutate(CTTrees = CT_1 + CT_2 + CT_3 + CT_4) %>%
+  mutate(Prop_CT1 = round(CT_1/CTTrees, digits=3),
+         Prop_CT2 = round(CT_2/CTTrees, digits=3),
+         Prop_CT3 = round(CT_3/CTTrees, digits=3),
+         Prop_CT4 = round(CT_4/CTTrees, digits=3))%>%
+  mutate(Prop_CT234 = Prop_CT2 + Prop_CT3+Prop_CT4) # this column contains the values for the Sparse crown column
+```
+
+### Branch dieback
+```{r, echo=FALSE}
+BrDB_reg <- data %>% filter(!is.na(BrDB)) %>%group_by(REGION, BrDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = BrDB, names_prefix = "BrDB_", values_from = total, values_fill = 0)%>%
+  mutate(BrDBtrees = BrDB_0 + BrDB_1 + BrDB_2)%>%
+  mutate(Prop_BrDB0 = round(BrDB_0/BrDBtrees, digits=3),
+         Prop_BrDB1 = round(BrDB_1/BrDBtrees, digits=3),
+         Prop_BrDB2 = round(BrDB_2/BrDBtrees, digits=3))%>%
+  mutate(Prop_BrDB12 = Prop_BrDB1 + Prop_BrDB2)# this column contains the values for the Branch dieback column
+```
+
+### Top dieback
+```{r, echo=FALSE}
+TopDB_reg <- data %>% filter(!is.na(TopDB))%>% group_by( REGION,TopDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = TopDB, names_prefix = "TopDB_", values_from = total, values_fill = 0) %>%
+  mutate(TopDBtrees = TopDB_0 + TopDB_1 + TopDB_2 + TopDB_3) %>%
+  mutate(Prop_TopDB0 = round(TopDB_0/TopDBtrees, digits=3),
+        Prop_TopDB1 = round(TopDB_1/TopDBtrees, digits=3),
+         Prop_TopDB2 = round(TopDB_2/TopDBtrees, digits=3),
+         Prop_TopDB3 = round(TopDB_3/TopDBtrees, digits=3)) %>%
+  mutate(Prop_TopDB123 = Prop_TopDB1 + Prop_TopDB2 + Prop_TopDB3) # this column contains the values for the top dieback column
+```
+
+### Tip dieback
+```{r, echo=FALSE}
+TipDB_reg <- data%>% filter(!is.na(TipDB)) %>% group_by(REGION,TipDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = TipDB, names_prefix = "TipDB_", values_from = total, values_fill = 0) %>%
+  mutate(TipDBtrees = TipDB_0 + TipDB_1 + TipDB_2)%>%
+  mutate(Prop_TipDB0 = round(TipDB_0/TipDBtrees, digits=3),
+         Prop_TipDB1 = round(TipDB_1/TipDBtrees, digits=3),
+         Prop_TipDB2 = round(TipDB_2/TipDBtrees, digits=3))%>%
+  mutate(Prop_TipDB12 = Prop_TipDB1 + Prop_TipDB2) # this column contains the values for the tip dieback column
+```
+
+### Sunken bole
+```{r, echo=FALSE}
+SnkBl_reg <- data %>% filter(!is.na(SnkBl)) %>% group_by(REGION,SnkBl) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = SnkBl, names_prefix = "SnkBl_", values_from = total, values_fill = 0) %>%
+  mutate(SnkBltrees = SnkBl_0 + SnkBl_1 + SnkBl_2)%>%
+  mutate(Prop_SnkBl0 = round(SnkBl_0/SnkBltrees, digits=3),
+         Prop_SnkBl1 = round(SnkBl_1/SnkBltrees, digits=3),
+         Prop_SnkBl2 = round(SnkBl_2/SnkBltrees, digits=3))%>%
+  mutate(Prop_SnkBl12 = Prop_SnkBl1 + Prop_SnkBl2)  # this column contains the values for the sunken bole column
+```
+
+### Pitching on bole
+```{r, echo=FALSE}
+PBl_reg <- data%>% filter(!is.na(PBl))  %>% group_by(REGION, PBl) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = PBl, names_prefix = "PBl_", values_from = total, values_fill = 0)%>%
+  mutate(PBltrees = PBl_0 + PBl_1 + PBl_2)%>%
+  mutate(Prop_PBl0 = round(PBl_0/PBltrees, digits=3),
+         Prop_PBl1 = round(PBl_1/PBltrees, digits=3),
+         Prop_PBl2 = round(PBl_2/PBltrees, digits=3))%>%
+  mutate(Prop_PBl12 = Prop_PBl1 + Prop_PBl2)# this column contains the values for the pitching on bole column
+```
+
+### Bacterial galls
+```{r, echo=FALSE}
+Gall_reg <- data %>% filter(!is.na(Gall)) %>% group_by(REGION, Gall) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = Gall, names_prefix = "Gall_", values_from = total, values_fill = 0)%>%
+  mutate(Galltrees = Gall_0 + Gall_1)%>%
+  mutate(Prop_Gall0 = round(Gall_0/Galltrees, digits=3),
+         Prop_Gall1 = round(Gall_1/Galltrees, digits=3)) # this column contains the values for the bacterial galls column
+```
+
+
+
+# Table 3
+## Chlorosis
+```{r, echo=FALSE}
+CC_sum<-data %>% filter(!is.na(CC)) %>%group_by(SITE_NAME, REGION, CC) %>% summarize(total = sum(count)) %>%
+  pivot_wider(names_from = CC, names_prefix = "CC_", values_from = total, values_fill = 0) %>%
+  mutate(CCTrees = CC_1 + CC_2 + CC_3) %>%
+  mutate(Prop_CC1 = round(CC_1/CCTrees, digits=3),
+         Prop_CC2 = round(CC_2/CCTrees, digits=3),
+         Prop_CC3 = round(CC_3/CCTrees, digits=3))%>%
+  mutate(Prop_CC23 = Prop_CC2 + Prop_CC3) # this column contains the values for the Chlorosis column
+```
+
+## Crown sparseness
+```{r, echo=FALSE}
+CT_sum <- data %>% filter(!is.na(CT)) %>%group_by(SITE_NAME,REGION, CT) %>% summarize(total = sum(count)) %>%
+  pivot_wider(names_from = CT, names_prefix = "CT_", values_from = total, values_fill = 0) %>%
+  mutate(CTTrees = CT_1 + CT_2 + CT_3 + CT_4) %>%
+  mutate(Prop_CT1 = round(CT_1/CTTrees, digits=3),
+         Prop_CT2 = round(CT_2/CTTrees, digits=3),
+         Prop_CT3 = round(CT_3/CTTrees, digits=3),
+         Prop_CT4 = round(CT_4/CTTrees, digits=3))%>%
+  mutate(Prop_CT234 = Prop_CT2 + Prop_CT3+Prop_CT4) # this column contains the values for the Sparse crown column
+```
+
+## Branch dieback
+```{r, echo=FALSE}
+BrDB_sum <- data %>% filter(!is.na(BrDB)) %>%group_by(SITE_NAME,REGION, BrDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = BrDB, names_prefix = "BrDB_", values_from = total, values_fill = 0)%>%
+  mutate(BrDBtrees = BrDB_0 + BrDB_1 + BrDB_2)%>%
+  mutate(Prop_BrDB0 = round(BrDB_0/BrDBtrees, digits=3),
+         Prop_BrDB1 = round(BrDB_1/BrDBtrees, digits=3),
+         Prop_BrDB2 = round(BrDB_2/BrDBtrees, digits=3))%>%
+  mutate(Prop_BrDB12 = Prop_BrDB1 + Prop_BrDB2)# this column contains the values for the Branch dieback column
+```
+
+## Top dieback
+```{r, echo=FALSE}
+TopDB_sum <- data %>% filter(!is.na(TopDB))%>% group_by(SITE_NAME, REGION,TopDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = TopDB, names_prefix = "TopDB_", values_from = total, values_fill = 0) %>%
+  mutate(TopDBtrees = TopDB_0 + TopDB_1 + TopDB_2 + TopDB_3) %>%
+  mutate(Prop_TopDB0 = round(TopDB_0/TopDBtrees, digits=3),
+        Prop_TopDB1 = round(TopDB_1/TopDBtrees, digits=3),
+         Prop_TopDB2 = round(TopDB_2/TopDBtrees, digits=3),
+         Prop_TopDB3 = round(TopDB_3/TopDBtrees, digits=3)) %>%
+  mutate(Prop_TopDB123 = Prop_TopDB1 + Prop_TopDB2 + Prop_TopDB3) # this column contains the values for the top dieback column
+```
+
+## Tip dieback
+```{r, echo=FALSE}
+TipDB_sum <- data%>% filter(!is.na(TipDB)) %>% group_by(SITE_NAME, REGION,TipDB) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = TipDB, names_prefix = "TipDB_", values_from = total, values_fill = 0) %>%
+  mutate(TipDBtrees = TipDB_0 + TipDB_1 + TipDB_2)%>%
+  mutate(Prop_TipDB0 = round(TipDB_0/TipDBtrees, digits=3),
+         Prop_TipDB1 = round(TipDB_1/TipDBtrees, digits=3),
+         Prop_TipDB2 = round(TipDB_2/TipDBtrees, digits=3))%>%
+  mutate(Prop_TipDB12 = Prop_TipDB1 + Prop_TipDB2) # this column contains the values for the tip dieback column
+```
+
+## Sunken bole
+```{r, echo=FALSE}
+SnkBl_sum <- data %>% filter(!is.na(SnkBl)) %>% group_by(SITE_NAME, REGION,SnkBl) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = SnkBl, names_prefix = "SnkBl_", values_from = total, values_fill = 0) %>%
+  mutate(SnkBltrees = SnkBl_0 + SnkBl_1 + SnkBl_2)%>%
+  mutate(Prop_SnkBl0 = round(SnkBl_0/SnkBltrees, digits=3),
+         Prop_SnkBl1 = round(SnkBl_1/SnkBltrees, digits=3),
+         Prop_SnkBl2 = round(SnkBl_2/SnkBltrees, digits=3))%>%
+  mutate(Prop_SnkBl12 = Prop_SnkBl1 + Prop_SnkBl2)  # this column contains the values for the sunken bole column
+```
+
+## Pitching on bole
+```{r, echo=FALSE}
+PBl_sum <- data%>% filter(!is.na(PBl))  %>% group_by(SITE_NAME,REGION, PBl) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = PBl, names_prefix = "PBl_", values_from = total, values_fill = 0)%>%
+  mutate(PBltrees = PBl_0 + PBl_1 + PBl_2)%>%
+  mutate(Prop_PBl0 = round(PBl_0/PBltrees, digits=3),
+         Prop_PBl1 = round(PBl_1/PBltrees, digits=3),
+         Prop_PBl2 = round(PBl_2/PBltrees, digits=3))%>%
+  mutate(Prop_PBl12 = Prop_PBl1 + Prop_PBl2)# this column contains the values for the pitching on bole column
+```
+
+## Bacterial galls
+```{r, echo=FALSE}
+Gall_sum <- data %>% filter(!is.na(Gall)) %>% group_by(SITE_NAME,REGION, Gall) %>% summarize(total = sum(count))%>%
+  pivot_wider(names_from = Gall, names_prefix = "Gall_", values_from = total, values_fill = 0)%>%
+  mutate(Galltrees = Gall_0 + Gall_1)%>%
+  mutate(Prop_Gall0 = round(Gall_0/Galltrees, digits=3),
+         Prop_Gall1 = round(Gall_1/Galltrees, digits=3)) # this column contains the values for the bacterial galls column
+```
+
+# Appendix figures
+## Proportion by chlorosis class by site and regional provenance
+Figure S1
+```{r, echo=FALSE}
+CC_sumlong<-data %>% filter(!is.na(CC)) %>%group_by(SITE_NAME, REGION, CC) %>% summarize(total = sum(count)) %>%
+  mutate(CC = as.factor(CC))%>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+      mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")) %>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+
+palCC<-hcl.colors(10, palette="ag_GrnYl")
+palCC_man <- c("#3C5941","#8ECF69","#EDEF5C")
+
+(p2<-ggplot(CC_sumlong, aes(x = REGION, y = total, fill = CC)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+     theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palCC_man, name="Chlorosis"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     CC=c('1','1','1','1','1','1','1','1','1'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p2new<-p2 + geom_text(
+  data    = ann_text, label = ann_text$label, color="white"))
+
+#ggsave(p2new, file="SIFigCrownColor_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by crown sparseness class by site and regional provenance
+Figure S2
+```{r, echo=FALSE}
+CT_sumlong<-data %>% filter(!is.na(CT)) %>%group_by(SITE_NAME,REGION, CT) %>% summarize(total = sum(count)) %>%
+  mutate(CT = as.factor(CT))%>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+palCT<-hcl.colors(10, palette="Greens")
+palCT_man <- c("#004616","#2B8238","#93CA8B","#D0EBC8")
+
+(p3<-ggplot(CT_sumlong, aes(x = REGION, y = total, fill = CT)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+      theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palCT_man, name="Crown sparseness"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7),
+                     CT=c('1','1','1','1','1','1','1','1','1'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p3new<-p3 + geom_text(
+  data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p3new, file="SIFigCrownSparseness_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by top dieback class by site and regional provenance
+Figure S5
+```{r, echo=FALSE}
+TopDB_sumlong<-data %>% filter(!is.na(TopDB)) %>%group_by(SITE_NAME, REGION,TopDB) %>% summarize(total = sum(count)) %>%
+  mutate(TopDB = as.factor(TopDB))%>%
+  mutate(TopDB = fct_relevel(TopDB, "0","1","2","3")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+palTopDB<-hcl.colors(4, palette="Fall")
+
+(p4<-ggplot(TopDB_sumlong, aes(x = REGION, y = total, fill = TopDB)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+     theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palTopDB, name="Top dieback"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     TopDB=c('0','0','0','0','0','0','0','0','0'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p4new<-p4 + geom_text(data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p4new, file="SIFigTopDB_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by tip dieback class by site and regional provenance
+Figure S4
+```{r, echo=FALSE}
+TipDB_sumlong<-data %>% filter(!is.na(TipDB)) %>%group_by(SITE_NAME, REGION,TipDB) %>% summarize(total = sum(count)) %>%
+  mutate(TipDB = as.factor(TipDB))%>%
+  mutate(TipDB = fct_relevel(TipDB, "0","1","2")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+palTipDB<-hcl.colors(3, palette="Fall")
+
+(p5<-ggplot(TipDB_sumlong, aes(x = REGION, y = total, fill = TipDB)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+         theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palTipDB, name="Tip dieback"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     TipDB=c('0','0','0','0','0','0','0','0','0'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p5new<-p5 + geom_text(data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p5new, file="SIFigTipDB_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by branch dieback class by site and regional provenance
+Figure S3
+```{r, echo=FALSE}
+BrDB_sumlong<-data %>% filter(!is.na(BrDB)) %>%group_by(SITE_NAME,REGION, BrDB) %>% summarize(total = sum(count)) %>%
+  mutate(BrDB = as.factor(BrDB))%>%
+  mutate(BrDB = fct_relevel(BrDB, "0","1","2")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+palBrDB<-hcl.colors(3, palette="Fall")
+
+(p6<-ggplot(BrDB_sumlong, aes(x = REGION, y = total, fill = BrDB)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+          theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palBrDB, name="Branch dieback"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     BrDB=c('0','0','0','0','0','0','0','0','0'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p6new<-p6 + geom_text(data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p6new, file="SIFigBranchDB_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by sunken bole class by site and regional provenance
+Figure S6
+```{r, echo=FALSE}
+SnkBl_sumlong<-data %>% filter(!is.na(SnkBl)) %>%group_by(SITE_NAME,REGION, SnkBl) %>% summarize(total = sum(count)) %>%
+  mutate(SnkBl = as.factor(SnkBl))%>%
+  mutate(SnkBl = fct_relevel(SnkBl, "0","1","2")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+palSnkBl<-hcl.colors(3, palette="Fall")
+
+(p9<-ggplot(SnkBl_sumlong, aes(x = REGION, y = total, fill = SnkBl)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+      theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palSnkBl, name="Sunken bole"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     SnkBl=c('0','0','0','0','0','0','0','0','0'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p9new<-p9 + geom_text(data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p9new, file="SIFigSunkenBole_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by pitch streaming on bole class by site and regional provenance
+Figure S7
+```{r, echo=FALSE}
+PBl_sumlong<-data %>% filter(!is.na(PBl)) %>%group_by(SITE_NAME,REGION, PBl) %>% summarize(total = sum(count)) %>%
+  mutate(PBl = as.factor(PBl))%>%
+  mutate(PBl = fct_relevel(PBl, "0","1","2")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH"))
+
+palPBl<-hcl.colors(3, palette="Fall")
+
+(p10<-ggplot(PBl_sumlong, aes(x = REGION, y = total, fill = PBl)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+          theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palPBl, name="Pitch streaming on bole"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     PBl=c('0','0','0','0','0','0','0','0','0'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p10new<-p10 + geom_text(data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p10new, file="SIFigPitchBole_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+
+## Proportion by bacterial gall presence/absence by site and regional provenance
+Figure S8
+```{r, echo=FALSE}
+Gall_sumlong<-data %>% filter(!is.na(Gall)) %>%group_by(SITE_NAME, REGION,Gall) %>% summarize(total = sum(count)) %>%
+  mutate(Gall = as.factor(Gall))%>%
+  mutate(Gall = fct_relevel(Gall, "0","1")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))%>%
+  mutate(SITE_NAME = fct_relevel(SITE_NAME, "Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop"))%>%
+  mutate(REGION = as.factor(REGION))%>%
+   mutate(REGION = fct_relevel(REGION, "CACST", "CAKLA", "CASIERRA", "ORCSTS", "ORSISL", "ORSISH", "ORCSTN", "ORCASL", "ORCASH",
+                              "WACST", "WACASL", "WACASH")) 
+
+palcheckbox<-hcl.colors(2, palette="Fall")
+
+(p12<-ggplot(Gall_sumlong, aes(x = REGION, y = total, fill = Gall)) +
+    facet_wrap(~SITE_NAME, scales='free')+
+  geom_col(position = "fill")+
+  labs(x = "Regional provenance", y="Proportion measured trees")+
+      theme_classic()+
+      theme(axis.text.x=element_text(angle = 55, vjust = 0.95, hjust = 0.95),
+            legend.position="top")+
+   scale_fill_manual(values=palcheckbox, name="Bacterial galls"))
+
+ann_text<-data.frame(REGION=c(4,5,6,7,8,9,10,11,12),
+                     SITE_NAME=factor(c("Floras", "StoneNursery", "EvansCreek", "Nortons", "SliceButte", "Soda320",
+                                "Jammer3", "Buckhorn2", "Doorstop")),
+                     total=c(0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5),
+                     Gall=c('0','0','0','0','0','0','0','0','0'),
+                     label=c("*","*","*","*","*","*","*","*","*"))
+
+(p12new<-p12 + geom_text(data    = ann_text, label = ann_text$label, color="white"))
+#ggsave(p12new, file="SIFigGalls_SiteRegion_20251030.png", dpi=300, height=7.5, width=7)
+```
+
+

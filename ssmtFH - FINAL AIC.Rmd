@@ -1,0 +1,1340 @@
+---
+title: "SSMT Forest Health Climatic Transfer Distance AIC"
+author: "Michelle C. Agne"
+date: "2026-06-04"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review / revision
+
+# Purpose and methods
+This script fits all candidate models and performs model selection for models of climate transfer distance effects on eight tree health indicator response variables. All tree health indicators were simplified to binary (presence/absence) variables. Resulting models assessed probability of a given tree health indicator, and were therefore fit with a binomial distribution and logit link.
+
+Candidate models were fit with transfer distance for one temperature-related variable (MCMT, MWMT, or MAT), one precipitation-related variable (MAP, MSP, or SHM), and temperature differential (TD, also known as continentality index). For each term in the model, the quadratic version of the term was also included. Climate variables were checked for multicollinearity prior to model fitting.
+
+All three-way and two-way combinations were fit as well as all single term models and a random effects only model, resulting in 30 candidate models per response variable. 
+
+All candidate models also included a random effect for seed source region as well as nested random effects of plot within block within site. 
+Exceptions: crown transparency models only included a random effect for seed source and a random effect of site due to model convergence issues with additional nested random effects (in all candidate models). Sunken bole only included a random effect for seed source region and nested random effects of  block within site due to model convergence issues with additional nested random effect (in all candidate models).
+
+All models were evaluated for convergence prior to model selection. Models that did not converge were excluded from model selection. The remaining models for each response variable were compared using AIC. We selected the model with the lowest AIC, although all models within deltaAIC of 2 were considered as equally "good" models. When there were multiple models within 2 deltaAIC, we selected the form that minimized the number of non-significant terms in the model while retaining significant predictors.
+
+Model output and visualization are available in TreeHealth_ClimTransfer.Rmd - this script generates the output Table S2
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(corrplot)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(AICcmodavg)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+```
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) 
+```
+
+# Read in standardized forest health metrics
+```{r}
+live_trees_w_homesource <- read.csv("live_trees_w_homesource.csv", row.names=1, na.strings="NA")
+```
+
+## Join
+```{r}
+live_trees_cond <- live_trees_w_homesource %>% dplyr::select(S, PLT, TAG, STEM:Gall_diff)
+
+field_climate_08_23 <- right_join(field_climate_08_23_inc,live_trees_cond, by=c("S","PLT","TAG")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))
+```
+
+## Standardize all predictors
+```{r, echo=FALSE}
+field_climate_08_23$Site_MCMT_std <- (field_climate_08_23$Site_MCMT - mean(field_climate_08_23$Site_MCMT))/(2*sd(field_climate_08_23$Site_MCMT))
+field_climate_08_23$MCMT_dist_std <- (field_climate_08_23$MCMT_dist - mean(field_climate_08_23$MCMT_dist))/(2*sd(field_climate_08_23$MCMT_dist))
+field_climate_08_23$Site_MWMT_std <- (field_climate_08_23$Site_MWMT - mean(field_climate_08_23$Site_MWMT))/(2*sd(field_climate_08_23$Site_MWMT))
+field_climate_08_23$MWMT_dist_std <- (field_climate_08_23$MWMT_dist - mean(field_climate_08_23$MWMT_dist))/(2*sd(field_climate_08_23$MWMT_dist))
+field_climate_08_23$Site_MSP_std <- (field_climate_08_23$Site_MSP - mean(field_climate_08_23$Site_MSP))/(2*sd(field_climate_08_23$Site_MSP))
+field_climate_08_23$MSP_dist_std <- (field_climate_08_23$MSP_dist - mean(field_climate_08_23$MSP_dist))/(2*sd(field_climate_08_23$MSP_dist))
+field_climate_08_23$Site_TD_std <- (field_climate_08_23$Site_TD - mean(field_climate_08_23$Site_TD))/(2*sd(field_climate_08_23$Site_TD))
+field_climate_08_23$TD_dist_std <- (field_climate_08_23$TD_dist - mean(field_climate_08_23$TD_dist))/(2*sd(field_climate_08_23$TD_dist))
+field_climate_08_23$Site_SHM_std <- (field_climate_08_23$Site_SHM - mean(field_climate_08_23$Site_SHM))/(2*sd(field_climate_08_23$Site_SHM))
+field_climate_08_23$SHM_dist_std <- (field_climate_08_23$SHM_dist - mean(field_climate_08_23$SHM_dist))/(2*sd(field_climate_08_23$SHM_dist))
+field_climate_08_23$Site_MAP_std <- (field_climate_08_23$Site_MAP - mean(field_climate_08_23$Site_MAP))/(2*sd(field_climate_08_23$Site_MAP))
+field_climate_08_23$MAP_dist_std <- (field_climate_08_23$MAP_dist - mean(field_climate_08_23$MAP_dist))/(2*sd(field_climate_08_23$MAP_dist))
+field_climate_08_23$Site_MAT_std <- (field_climate_08_23$Site_MAT - mean(field_climate_08_23$Site_MAT))/(2*sd(field_climate_08_23$Site_MAT))
+field_climate_08_23$MAT_dist_std <- (field_climate_08_23$MAT_dist - mean(field_climate_08_23$MAT_dist))/(2*sd(field_climate_08_23$MAT_dist))
+```
+
+# Crown color
+## Candidate models - standardized
+```{r,echo=FALSE}
+mCC_0_std <- glmer(CC_yellow ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCC_0_std)
+plot(mCC_0_std_simres, sub="mCC_0_std")#
+
+mCC_1_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_1_std_simres <- simulateResiduals(mCC_1_std)
+plot(mCC_1_std_simres, sub="mCC_1_std")#
+
+mCC_2_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_2_std_simres <- simulateResiduals(mCC_2_std)
+plot(mCC_2_std_simres, sub="mCC_2_std")#
+
+mCC_3_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_3_std_simres <- simulateResiduals(mCC_3_std)
+plot(mCC_3_std_simres, sub="mCC_3_std")#
+
+mCC_4_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_4_std_simres <- simulateResiduals(mCC_4_std)
+ plot(mCC_4_std_simres, sub="mCC_4_std")#
+
+mCC_45_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_45_std_simres <- simulateResiduals(mCC_45_std)
+plot(mCC_45_std_simres, sub="mCC_45_std")#
+testOutliers(mCC_45_std_simres, type="bootstrap")
+
+mCC_5_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_5_std_simres <- simulateResiduals(mCC_5_std)
+plot(mCC_5_std_simres, sub="mCC_5_std")#
+testOutliers(mCC_5_std_simres, type="bootstrap")
+
+mCC_6_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_6_std_simres <- simulateResiduals(mCC_6_std)
+ plot(mCC_6_std_simres, sub="mCC_6_std")#
+
+mCC_7_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_7_std_simres <- simulateResiduals(mCC_7_std)
+plot(mCC_7_std_simres, sub="mCC_7_std")#
+ testOutliers(mCC_7_std_simres, type="bootstrap")
+
+
+mCC_8_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_8_std_simres <- simulateResiduals(mCC_8_std)
+plot(mCC_8_std_simres, sub="mCC_8_std")#
+
+#two main terms only
+mCC_9_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_9_std_simres <- simulateResiduals(mCC_9_std)
+ plot(mCC_9_std_simres, sub="mCC_9_std")#
+
+mCC_10_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_10_std_simres <- simulateResiduals(mCC_10_std)
+plot(mCC_10_std_simres, sub="mCC_10_std")#
+
+mCC_11_std <- glmer(CC_yellow ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_11_std_simres <- simulateResiduals(mCC_11_std)
+ plot(mCC_11_std_simres, sub="mCC_11_std")#
+
+
+mCC_12_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_12_std_simres <- simulateResiduals(mCC_12_std)
+plot(mCC_12_std_simres, sub="mCC_12_std")#
+ 
+mCC_13_std <- glmer(CC_yellow ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_13_std_simres <- simulateResiduals(mCC_13_std)
+plot(mCC_13_std_simres, sub="mCC_13_std")#
+
+
+mCC_14_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_14_std_simres <- simulateResiduals(mCC_14_std)
+plot(mCC_14_std_simres, sub="mCC_14_std")#
+
+mCC_15_std <- glmer(CC_yellow ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_15_std_simres <- simulateResiduals(mCC_15_std)
+ plot(mCC_15_std_simres, sub="mCC_15_std")#
+
+mCC_16_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_16_std_simres <- simulateResiduals(mCC_16_std)
+ plot(mCC_16_std_simres, sub="mCC_16_std")#
+
+mCC_165_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_165_std_simres <- simulateResiduals(mCC_165_std)
+plot(mCC_165_std_simres, sub="mCC_165_std")#
+testOutliers(mCC_165_std_simres, type="bootstrap")
+
+mCC_17_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_17_std_simres <- simulateResiduals(mCC_17_std)
+ plot(mCC_17_std_simres, sub="mCC_17_std")#
+
+mCC_18_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_18_std_simres <- simulateResiduals(mCC_18_std)
+ plot(mCC_18_std_simres, sub="mCC_18_std")#
+
+mCC_19_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_19_std_simres <- simulateResiduals(mCC_19_std)
+ plot(mCC_19_std_simres, sub="mCC_19_std")#
+
+mCC_20_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_20_std_simres <- simulateResiduals(mCC_20_std)
+ plot(mCC_20_std_simres, sub="mCC_20_std")#
+
+mCC_21_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_21_std_simres <- simulateResiduals(mCC_21_std)
+ plot(mCC_21_std_simres, sub="mCC_21_std")#
+
+mCC_22_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_22_std_simres <- simulateResiduals(mCC_22_std)
+ plot(mCC_22_std_simres, sub="mCC_22_std")#
+
+
+#single main terms only
+mCC_23_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_23_std_simres <- simulateResiduals(mCC_23_std)
+ plot(mCC_23_std_simres, sub="mCC_23_std")#
+
+mCC_24_std <- glmer(CC_yellow ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_24_std_simres <- simulateResiduals(mCC_24_std)
+ plot(mCC_24_std_simres, sub="mCC_24_std")#
+ testOutliers(mCC_24_std_simres, type="bootstrap")
+
+mCC_25_std <- glmer(CC_yellow ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_25_std_simres <- simulateResiduals(mCC_25_std)
+ plot(mCC_25_std_simres, sub="mCC_25_std")#
+
+mCC_26_std <- glmer(CC_yellow ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_26_std_simres <- simulateResiduals(mCC_26_std)
+ plot(mCC_26_std_simres, sub="mCC_26_std")#
+  testOutliers(mCC_26_std_simres, type="bootstrap")
+
+mCC_27_std <- glmer(CC_yellow ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_27_std_simres <- simulateResiduals(mCC_27_std)
+ plot(mCC_27_std_simres, sub="mCC_27_std")#
+  testOutliers(mCC_27_std_simres, type="bootstrap")
+
+mCC_28_std <- glmer(CC_yellow ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_28_std_simres <- simulateResiduals(mCC_28_std)
+ plot(mCC_28_std_simres, sub="mCC_28_std")#
+
+mCC_29_std <- glmer(CC_yellow ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_29_std_simres <- simulateResiduals(mCC_29_std)
+ plot(mCC_29_std_simres, sub="mCC_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r}
+CC_modelsU  <- list(mCC_0_std,mCC_1_std, mCC_2_std, mCC_4_std, mCC_6_std,mCC_7_std, mCC_8_std,mCC_9_std, mCC_11_std,  mCC_13_std, mCC_15_std, mCC_165_std,  mCC_18_std,  mCC_22_std, mCC_23_std, mCC_24_std,mCC_25_std, mCC_26_std, mCC_27_std, mCC_28_std, mCC_29_std) 
+mod.namesCCU <- c('mCC_0_std','mCC_1_std', 'mCC_2_std', 'mCC_4_std','mCC_6_std','mCC_7_std', 'mCC_8_std', 'mCC_9_std', 'mCC_11_std',  'mCC_13_std',  'mCC_15_std', 'mCC_165_std ', 'mCC_18_std',  'mCC_22_std', 'mCC_23_std', 'mCC_24_std','mCC_25_std','mCC_26_std',  'mCC_27_std', 'mCC_28_std', 'mCC_29_std') 
+
+# Calculate AIC for each model 
+CCmodels_aic_tableU <- aictab(cand.set = CC_modelsU, modnames=mod.namesCCU) 
+print(CCmodels_aic_tableU)
+
+# Selected model
+summary(mCC_7_std)
+```
+
+# Crown transparency
+## Candidate models - standardized
+```{r,echo=FALSE}
+mCT_0_std <- glmer(CT_sparse ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_0_std)
+ plot(mCC_0_std_simres, sub="mCT_0_std")#
+
+mCT_1_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_1_std)
+ plot(mCC_0_std_simres, sub="mCT_1_std")#
+
+mCT_2_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_2_std)
+ plot(mCC_0_std_simres, sub="mCT_2_std")#
+
+mCT_3_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_3_std)
+ plot(mCC_0_std_simres, sub="mCT_3_std")#
+
+mCT_4_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_4_std)
+ plot(mCC_0_std_simres, sub="mCT_4_std")#
+
+mCT_45_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_45_std)
+plot(mCC_0_std_simres, sub="mCT_45_std")#
+
+mCT_5_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_5_std)
+ plot(mCC_0_std_simres, sub="mCT_5_std")#
+
+mCT_6_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_6_std)
+ plot(mCC_0_std_simres, sub="mCT_6_std")#
+
+mCT_7_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_7_std)
+ plot(mCC_0_std_simres, sub="mCT_7_std")#
+
+mCT_8_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_8_std)
+ plot(mCC_0_std_simres, sub="mCT_8_std")#
+
+#two main terms only
+mCT_9_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_9_std)
+ plot(mCC_0_std_simres, sub="mCT_9_std")#
+
+mCT_10_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_10_std)
+ plot(mCC_0_std_simres, sub="mCT_10_std")#
+
+mCT_11_std <- glmer(CT_sparse ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_11_std)
+ plot(mCC_0_std_simres, sub="mCT_11_std")#
+
+
+mCT_12_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_12_std)
+ plot(mCC_0_std_simres, sub="mCT_12_std")#
+
+mCT_13_std <- glmer(CT_sparse ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_13_std)
+ plot(mCC_0_std_simres, sub="mCT_13_std")#
+
+mCT_14_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_14_std)
+ plot(mCC_0_std_simres, sub="mCT_14_std")#
+
+mCT_15_std <- glmer(CT_sparse ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_15_std)
+ plot(mCC_0_std_simres, sub="mCT_15_std")#
+
+mCT_16_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_16_std)
+plot(mCC_0_std_simres, sub="mCT_16_std")#
+
+mCT_165_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_165_std)
+plot(mCC_0_std_simres, sub="mCT_165_std")#
+
+mCT_17_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_17_std)
+plot(mCC_0_std_simres, sub="mCT_17_std")#
+
+mCT_18_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_18_std)
+plot(mCC_0_std_simres, sub="mCT_18_std")#
+
+mCT_19_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_19_std)
+plot(mCC_0_std_simres, sub="mCT_19_std")#
+
+mCT_20_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_20_std)
+plot(mCC_0_std_simres, sub="mCT_20_std")#
+
+mCT_21_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_21_std)
+ plot(mCC_0_std_simres, sub="mCT_21_std")#
+
+mCT_22_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_22_std)
+ plot(mCC_0_std_simres, sub="mCT_22_std")#
+
+
+#single main terms only
+mCT_23_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_23_std)
+plot(mCC_0_std_simres, sub="mCT_23_std")#
+
+mCT_24_std <- glmer(CT_sparse ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_24_std)
+plot(mCC_0_std_simres, sub="mCT_24_std")#
+
+mCT_25_std <- glmer(CT_sparse ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_25_std)
+plot(mCC_0_std_simres, sub="mCT_25_std")#
+
+mCT_26_std <- glmer(CT_sparse ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_26_std)
+plot(mCC_0_std_simres, sub="mCT_26_std")#
+
+mCT_27_std <- glmer(CT_sparse ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_27_std)
+plot(mCC_0_std_simres, sub="mCT_27_std")#
+
+mCT_28_std <- glmer(CT_sparse ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_28_std)
+plot(mCC_0_std_simres, sub="mCT_28_std")#
+
+mCT_29_std <- glmer(CT_sparse ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mCT_29_std)
+plot(mCC_0_std_simres, sub="mCT_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+ # Create a list of models 
+CT_modelsU <- list(mCT_0_std,  mCT_4_std, mCT_45_std,  mCT_7_std,  mCT_13_std,  mCT_16_std, mCT_17_std, mCT_18_std,  mCT_23_std, mCT_24_std, mCT_25_std,  mCT_27_std, mCT_28_std, mCT_29_std) 
+mod.namesU <- c('mCT_0_std', 'mCT_4_std','mCT_45_std ',  'mCT_7_std',  'mCT_13_std', 'mCT_16_std', 'mCT_17_std', 'mCT_18_std',  'mCT_23_std', 'mCT_24_std', 'mCT_25_std',  'mCT_27_std', 'mCT_28_std', 'mCT_29_std') 
+
+# Calculate AIC for each model 
+CTmodels_aic_tableU <- aictab(cand.set = CT_modelsU, modnames=mod.namesU) 
+print(CTmodels_aic_tableU)
+
+# Selected model
+summary(mCT_7_std)
+```
+
+# Top dieback
+## Candidate models - standardized
+```{r,echo=FALSE}
+mTDB_0_std <- glmer(TopDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_0_std)
+plot(mCC_0_std_simres, sub="mTDB_0_std")#
+
+mTDB_1_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_1_std)
+plot(mCC_0_std_simres, sub="mTDB_1_std")#
+
+mTDB_2_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_2_std)
+plot(mCC_0_std_simres, sub="mTDB_2_std")#
+
+mTDB_3_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_3_std)
+ plot(mCC_0_std_simres, sub="mTDB_3_std")#
+
+mTDB_4_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_4_std)
+plot(mCC_0_std_simres, sub="mTDB_4_std")#
+
+mTDB_45_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_45_std)
+plot(mCC_0_std_simres, sub="mTDB_45_std")#
+
+mTDB_5_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_5_std)
+plot(mCC_0_std_simres, sub="mTDB_5_std")#
+ 
+mTDB_6_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_6_std)
+ plot(mCC_0_std_simres, sub="mTDB_6_std")#
+
+mTDB_7_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_7_std)
+ plot(mCC_0_std_simres, sub="mTDB_7_std")#
+
+mTDB_8_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_8_std)
+ plot(mCC_0_std_simres, sub="mTDB_8_std")#
+
+#two main terms only
+mTDB_9_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_9_std)
+plot(mCC_0_std_simres, sub="mTDB_9_std")#
+
+mTDB_10_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_10_std)
+plot(mCC_0_std_simres, sub="mTDB_10_std")#
+ 
+mTDB_11_std <- glmer(TopDB01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_11_std)
+plot(mCC_0_std_simres, sub="mTDB_11_std")#
+
+mTDB_12_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_12_std)
+plot(mCC_0_std_simres, sub="mTDB_12_std")#
+
+mTDB_13_std <- glmer(TopDB01 ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_13_std)
+plot(mCC_0_std_simres, sub="mTDB_13_std")#
+
+
+mTDB_14_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_14_std)
+plot(mCC_0_std_simres, sub="mTDB_14_std")#
+
+mTDB_15_std <- glmer(TopDB01 ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_15_std)
+plot(mCC_0_std_simres, sub="mTDB_15_std")#
+
+mTDB_16_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_16_std)
+plot(mCC_0_std_simres, sub="mTDB_16_std")#
+
+mTDB_165_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_165_std)
+plot(mCC_0_std_simres, sub="mTDB_165_std")#
+
+mTDB_17_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_17_std)
+plot(mCC_0_std_simres, sub="mTDB_17_std")#
+
+mTDB_18_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_18_std)
+plot(mCC_0_std_simres, sub="mTDB_18_std")#
+
+mTDB_19_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_19_std)
+plot(mCC_0_std_simres, sub="mTDB_19_std")#
+
+mTDB_20_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_20_std)
+plot(mCC_0_std_simres, sub="mTDB_20_std")#
+
+mTDB_21_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_21_std)
+plot(mCC_0_std_simres, sub="mTDB_21_std")#
+
+mTDB_22_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_22_std)
+plot(mCC_0_std_simres, sub="mTDB_22_std")#
+
+
+#single main terms only
+mTDB_23_std <- glmer(TopDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_23_std)
+plot(mCC_0_std_simres, sub="mTDB_23_std")#
+
+mTDB_24_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_24_std)
+plot(mCC_0_std_simres, sub="mTDB_24_std")#
+
+mTDB_25_std <- glmer(TopDB01 ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_25_std)
+plot(mCC_0_std_simres, sub="mTDB_25_std")#
+
+mTDB_26_std <- glmer(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_26_std)
+plot(mCC_0_std_simres, sub="mTDB_26_std")#
+
+mTDB_27_std <- glmer(TopDB01 ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_27_std)
+plot(mCC_0_std_simres, sub="mTDB_27_std")#
+
+mTDB_28_std <- glmer(TopDB01 ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_28_std)
+plot(mCC_0_std_simres, sub="mTDB_28_std")#
+
+mTDB_29_std <- glmer(TopDB01 ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTDB_29_std)
+plot(mCC_0_std_simres, sub="mTDB_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+ # Create a list of models 
+TDB_models <- list(mTDB_10_std, mTDB_11_std, mTDB_15_std, mTDB_19_std, mTDB_21_std) 
+TDBmod.names <- c('mTDB_10_std', 'mTDB_11_std', 'mTDB_15_std', 'mTDB_19_std', 'mTDB_21_std') 
+
+# Calculate AIC for each model 
+TDB_models_aic_table <- aictab(cand.set = TDB_models, modnames=TDBmod.names) 
+print(TDB_models_aic_table)
+
+# Selected model
+summary(mTDB_11_std) 
+```
+
+# Tip dieback
+## Candidate models - standardized
+Compare with Plot as a random effect
+```{r,echo=FALSE}
+mTip_0_std <- glmer(TipDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_0_std)
+plot(mCC_0_std_simres, sub="mTip_0_std")#
+
+mTip_1_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_1_std)
+plot(mCC_0_std_simres, sub="mTip_1_std")#
+
+mTip_2_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_2_std)
+plot(mCC_0_std_simres, sub="mTip_2_std")#
+
+mTip_3_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_3_std)
+plot(mCC_0_std_simres, sub="mTip_3_std")#
+
+mTip_4_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_4_std)
+plot(mCC_0_std_simres, sub="mTip_4_std")#
+
+mTip_45_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_45_std)
+plot(mCC_0_std_simres, sub="mTip_45_std")#
+
+mTip_5_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_5_std)
+plot(mCC_0_std_simres, sub="mTip_5_std")#
+
+mTip_6_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_6_std)
+plot(mCC_0_std_simres, sub="mTip_6_std")#
+
+mTip_7_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_7_std)
+plot(mCC_0_std_simres, sub="mTip_7_std")#
+
+mTip_8_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_8_std)
+plot(mCC_0_std_simres, sub="mTip_8_std")#
+
+#two main terms only
+mTip_9_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_9_std)
+plot(mCC_0_std_simres, sub="mTip_9_std")#
+
+mTip_10_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_10_std)
+plot(mCC_0_std_simres, sub="mTip_10_std")#
+
+mTip_11_std <- glmer(TipDB01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_11_std)
+plot(mCC_0_std_simres, sub="mTip_11_std")#
+
+
+mTip_12_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_12_std)
+plot(mCC_0_std_simres, sub="mTip_12_std")#
+
+mTip_13_std <- glmer(TipDB01 ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_13_std)
+plot(mCC_0_std_simres, sub="mTip_13_std")#
+
+
+mTip_14_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_14_std)
+plot(mCC_0_std_simres, sub="mTip_14_std")#
+
+mTip_15_std <- glmer(TipDB01 ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_15_std)
+plot(mCC_0_std_simres, sub="mTip_15_std")#
+
+mTip_16_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_16_std)
+plot(mCC_0_std_simres, sub="mTip_16_std")#
+ 
+ mTip_165_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ mCC_0_std_simres <- simulateResiduals(mTip_165_std)
+ plot(mCC_0_std_simres, sub="mTip_165_std")#
+
+
+mTip_17_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_17_std)
+plot(mCC_0_std_simres, sub="mTip_17_std")#
+
+mTip_18_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_18_std)
+plot(mCC_0_std_simres, sub="mTip_18_std")#
+
+mTip_19_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_19_std)
+plot(mCC_0_std_simres, sub="mTip_19_std")#
+
+mTip_20_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_20_std)
+plot(mCC_0_std_simres, sub="mTip_20_std")#
+
+mTip_21_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_21_std)
+plot(mCC_0_std_simres, sub="mTip_21_std")#
+
+mTip_22_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_22_std)
+plot(mCC_0_std_simres, sub="mTip_22_std")#
+
+
+#single main terms only
+mTip_23_std <- glmer(TipDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_23_std)
+plot(mCC_0_std_simres, sub="mTip_23_std")#
+
+mTip_24_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_24_std)
+plot(mCC_0_std_simres, sub="mTip_24_std")#
+
+mTip_25_std <- glmer(TipDB01 ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_25_std)
+plot(mCC_0_std_simres, sub="mTip_25_std")#
+
+mTip_26_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_26_std)
+plot(mCC_0_std_simres, sub="mTip_26_std")#
+
+mTip_27_std <- glmer(TipDB01 ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_27_std)
+plot(mCC_0_std_simres, sub="mTip_27_std")#
+
+mTip_28_std <- glmer(TipDB01 ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_28_std)
+plot(mCC_0_std_simres, sub="mTip_28_std")#
+
+mTip_29_std <- glmer(TipDB01 ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mTip_29_std)
+plot(mCC_0_std_simres, sub="mTip_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+#New set with plot random effect
+tip_modelsUP <- list(mTip_4_std,mTip_8_std,mTip_11_std, mTip_13_std, mTip_15_std,mTip_16_std, mTip_18_std, mTip_21_std, mTip_23_std, mTip_24_std,mTip_25_std, mTip_26_std, mTip_27_std,mTip_28_std,mTip_29_std) 
+
+mod.namestipUP <- c('mTip_4_std','mTip_8_std','mTip_11_std', 'mTip_13_std','mTip_15_std', 'mTip_16_std', 'mTip_18_std', 'mTip_21_std', 'mTip_23_std', 'mTip_24_std', 'mTip_25_std', 'mTip_26_std','mTip_27_std','mTip_28_std', 'mTip_29_std') 
+
+# Calculate AIC for each model 
+tipmodels_aic_tableUP <- aictab(cand.set = tip_modelsUP, modnames=mod.namestipUP) 
+print(tipmodels_aic_tableUP)
+
+#Selected model
+summary(mTip_11_std)
+```
+
+# Branch dieback
+## Candidate models - standardized
+```{r,echo=FALSE}
+mBrDB_0_std <- glmer(BrDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_0_std)
+plot(mCC_0_std_simres, sub="mBrDB_0_std")#
+ 
+mBrDB_1_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_1_std)
+plot(mCC_0_std_simres, sub="mBrDB_1_std")#
+
+mBrDB_2_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_2_std)
+plot(mCC_0_std_simres, sub="mBrDB_2_std")#
+
+mBrDB_3_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_3_std)
+plot(mCC_0_std_simres, sub="mBrDB_3_std")#
+
+mBrDB_4_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_4_std)
+plot(mCC_0_std_simres, sub="mBrDB_4_std")#
+
+mBrDB_45_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_45_std)
+plot(mCC_0_std_simres, sub="mBrDB_45_std")#
+
+mBrDB_5_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_5_std)
+plot(mCC_0_std_simres, sub="mBrDB_5_std")#
+
+mBrDB_6_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_6_std)
+plot(mCC_0_std_simres, sub="mBrDB_6_std")#
+
+mBrDB_7_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_7_std)
+ plot(mCC_0_std_simres, sub="mBrDB_7_std")#
+
+mBrDB_8_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_8_std)
+ plot(mCC_0_std_simres, sub="mBrDB_8_std")#
+
+#two main terms only
+mBrDB_9_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_9_std)
+plot(mCC_0_std_simres, sub="mBrDB_9_std")#
+
+mBrDB_10_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_10_std)
+ plot(mCC_0_std_simres, sub="mBrDB_10_std")#
+
+mBrDB_11_std <- glmer(BrDB01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_11_std)
+plot(mCC_0_std_simres, sub="mBrDB_11_std")#
+
+mBrDB_12_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_12_std)
+ plot(mCC_0_std_simres, sub="mBrDB_12_std")#
+
+mBrDB_13_std <- glmer(BrDB01 ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_13_std)
+ plot(mCC_0_std_simres, sub="mBrDB_13_std")#
+
+
+mBrDB_14_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_14_std)
+ plot(mCC_0_std_simres, sub="mBrDB_14_std")#
+
+mBrDB_15_std <- glmer(BrDB01 ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_15_std)
+ plot(mCC_0_std_simres, sub="mBrDB_15_std")#
+
+mBrDB_16_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_16_std)
+plot(mCC_0_std_simres, sub="mBrDB_16_std")#
+
+mBrDB_165_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_165_std)
+plot(mCC_0_std_simres, sub="mBrDB_165_std")#
+
+mBrDB_17_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_17_std)
+plot(mCC_0_std_simres, sub="mBrDB_17_std")#
+
+mBrDB_18_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_18_std)
+plot(mCC_0_std_simres, sub="mBrDB_18_std")#
+
+mBrDB_19_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_19_std)
+plot(mCC_0_std_simres, sub="mBrDB_19_std")#
+
+mBrDB_20_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_20_std)
+ plot(mCC_0_std_simres, sub="mBrDB_20_std")#
+
+mBrDB_21_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_21_std)
+ plot(mCC_0_std_simres, sub="mBrDB_21_std")#
+
+mBrDB_22_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_22_std)
+ plot(mCC_0_std_simres, sub="mBrDB_22_std")#
+
+
+#single main terms only
+mBrDB_23_std <- glmer(BrDB01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_23_std)
+plot(mCC_0_std_simres, sub="mBrDB_23_std")#
+
+mBrDB_24_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_24_std)
+plot(mCC_0_std_simres, sub="mBrDB_24_std")#
+
+mBrDB_25_std <- glmer(BrDB01 ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_25_std)
+plot(mCC_0_std_simres, sub="mBrDB_25_std")#
+
+mBrDB_26_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_26_std)
+plot(mCC_0_std_simres, sub="mBrDB_26_std")#
+
+mBrDB_27_std <- glmer(BrDB01 ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_27_std)
+ plot(mCC_0_std_simres, sub="mBrDB_27_std")#
+
+mBrDB_28_std <- glmer(BrDB01 ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_28_std)
+ plot(mCC_0_std_simres, sub="mBrDB_28_std")#
+
+mBrDB_29_std <- glmer(BrDB01 ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mBrDB_29_std)
+plot(mCC_0_std_simres, sub="mBrDB_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+ # Create a list of models 
+BrDB_modelsU <- list(mBrDB_0_std, mBrDB_9_std, mBrDB_12_std, mBrDB_19_std,mBrDB_22_std, mBrDB_23_std, mBrDB_24_std, mBrDB_25_std, mBrDB_26_std, mBrDB_27_std, mBrDB_29_std) 
+
+BrDB_modelsU.names <- c('mBrDB_0_std', 'mBrDB_9_std', 'mBrDB_12_std', 'mBrDB_19_std','mBrDB_22_std', 'mBrDB_23_std', 'mBrDB_24_std', 'mBrDB_25_std', 'mBrDB_26_std', 'mBrDB_27_std', 'mBrDB_29_std') 
+
+# Calculate AIC for each model 
+BrDB_models_aic_tableU <- aictab(cand.set = BrDB_modelsU, modnames=BrDB_modelsU.names) 
+print(BrDB_models_aic_tableU)
+
+# Selected model
+ summary(mBrDB_12_std)
+```
+
+
+# Sunken bole
+## Candidate models - standardized
+```{r,echo=FALSE}
+mSnk_0_std <- glmer(SnkBl01 ~ (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_0_std)
+plot(mCC_0_std_simres, sub="mSnk_0_std")#
+
+mSnk_1_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_1_std)
+ plot(mCC_0_std_simres, sub="mSnk_1_std")#
+
+mSnk_2_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_2_std)
+ plot(mCC_0_std_simres, sub="mSnk_2_std")#
+
+mSnk_3_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_3_std)
+plot(mCC_0_std_simres, sub="mSnk_3_std")#
+
+mSnk_4_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_4_std)
+plot(mCC_0_std_simres, sub="mSnk_4_std")#
+
+mSnk_45_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_45_std)
+plot(mCC_0_std_simres, sub="mSnk_45_std")#
+
+
+mSnk_5_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_5_std)
+ plot(mCC_0_std_simres, sub="mSnk_5_std")#
+
+mSnk_6_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_6_std)
+plot(mCC_0_std_simres, sub="mSnk_6_std")#
+
+mSnk_7_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_7_std)
+plot(mCC_0_std_simres, sub="mSnk_7_std")#
+
+mSnk_8_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_8_std)
+plot(mCC_0_std_simres, sub="mSnk_8_std")#
+
+#two main terms only
+mSnk_9_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_9_std)
+plot(mCC_0_std_simres, sub="mSnk_9_std")#
+
+mSnk_10_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_10_std)
+plot(mCC_0_std_simres, sub="mSnk_10_std")#
+
+mSnk_11_std <- glmer(SnkBl01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_11_std)
+plot(mCC_0_std_simres, sub="mSnk_11_std")#
+
+
+mSnk_12_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_12_std)
+plot(mCC_0_std_simres, sub="mSnk_12_std")#
+
+mSnk_13_std <- glmer(SnkBl01 ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_13_std)
+plot(mCC_0_std_simres, sub="mSnk_13_std")#
+
+
+mSnk_14_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_14_std)
+plot(mCC_0_std_simres, sub="mSnk_14_std")#
+
+mSnk_15_std <- glmer(SnkBl01 ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_15_std)
+plot(mCC_0_std_simres, sub="mSnk_15_std")##
+
+mSnk_16_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_16_std)
+plot(mCC_0_std_simres, sub="mSnk_16_std")##
+
+mSnk_165_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_165_std)
+plot(mCC_0_std_simres, sub="mSnk_165_std")#
+
+
+mSnk_17_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_17_std)
+plot(mCC_0_std_simres, sub="mSnk_17_std")##
+
+mSnk_18_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_18_std)
+plot(mCC_0_std_simres, sub="mSnk_18_std")##
+
+mSnk_19_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_19_std)
+plot(mCC_0_std_simres, sub="mSnk_19_std")##
+
+mSnk_20_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_20_std)
+plot(mCC_0_std_simres, sub="mSnk_20_std")##
+
+mSnk_21_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_21_std)
+plot(mCC_0_std_simres, sub="mSnk_21_std")##
+
+mSnk_22_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_22_std)
+plot(mCC_0_std_simres, sub="mSnk_22_std")##
+
+
+#single main terms only
+mSnk_23_std <- glmer(SnkBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_23_std)
+plot(mCC_0_std_simres, sub="mSnk_23_std")##
+
+mSnk_24_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_24_std)
+plot(mCC_0_std_simres, sub="mSnk_24_std")##
+
+mSnk_25_std <- glmer(SnkBl01 ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_25_std)
+plot(mCC_0_std_simres, sub="mSnk_25_std")##
+
+mSnk_26_std <- glmer(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_26_std)
+plot(mCC_0_std_simres, sub="mSnk_26_std")##
+
+mSnk_27_std <- glmer(SnkBl01 ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_27_std)
+plot(mCC_0_std_simres, sub="mSnk_27_std")##
+
+mSnk_28_std <- glmer(SnkBl01 ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_28_std)
+plot(mCC_0_std_simres, sub="mSnk_28_std")##
+ 
+mSnk_29_std <- glmer(SnkBl01 ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mSnk_29_std)
+plot(mCC_0_std_simres, sub="mSnk_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+ # Create a list of models with those that failed to converge removed
+Snk_models <- list(mSnk_0_std,mSnk_3_std, mSnk_4_std, mSnk_45_std, mSnk_6_std,   mSnk_10_std, mSnk_11_std,  mSnk_14_std, mSnk_15_std,  mSnk_17_std,  mSnk_19_std, mSnk_20_std, mSnk_21_std, mSnk_22_std, mSnk_25_std, mSnk_26_std, mSnk_27_std, mSnk_28_std, mSnk_29_std) 
+Snkmod.names <- c('mSnk_0_std','mSnk_3_std', 'mSnk_4_std','mSnk_45_std', 'mSnk_6_std',   'mSnk_10_std', 'mSnk_11_std', 'mSnk_14_std', 'mSnk_15_std',  'mSnk_17_std',  'mSnk_19_std', 'mSnk_20_std', 'mSnk_21_std', 'mSnk_22_std',  'mSnk_25_std', 'mSnk_26_std', 'mSnk_27_std', 'mSnk_28_std', 'mSnk_29_std') 
+
+# Calculate AIC for each model 
+Snkmodels_aic_table <- aictab(cand.set = Snk_models, modnames=Snkmod.names) 
+print(Snkmodels_aic_table)
+
+# Selected model
+summary(mSnk_19_std)
+```
+
+
+# Pitch streaming on bole
+## Candidate models - standardized
+```{r,echo=FALSE}
+mPBl_0_std <- glmer(PBl01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_0_std)
+plot(mCC_0_std_simres, sub="mPBl_0_std")#
+
+mPBl_1_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_1_std)
+ plot(mCC_0_std_simres, sub="mPBl_1_std")#
+
+mPBl_2_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_2_std)
+plot(mCC_0_std_simres, sub="mPBl_2_std")#
+
+mPBl_3_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_3_std)
+plot(mCC_0_std_simres, sub="mPBl_3_std")#
+
+mPBl_4_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_4_std)
+plot(mCC_0_std_simres, sub="mPBl_4_std")#
+
+mPBl_45_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_45_std)
+plot(mCC_0_std_simres, sub="mPBl_45_std")#
+
+
+mPBl_5_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_5_std)
+plot(mCC_0_std_simres, sub="mPBl_5_std")#
+
+mPBl_6_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_6_std)
+ plot(mCC_0_std_simres, sub="mPBl_6_std")#
+
+mPBl_7_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_7_std)
+ plot(mCC_0_std_simres, sub="mPBl_7_std")#
+
+mPBl_8_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_8_std)
+plot(mCC_0_std_simres, sub="mPBl_8_std")#
+
+#two main terms only
+mPBl_9_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_9_std)
+plot(mCC_0_std_simres, sub="mPBl_9_std")#
+
+mPBl_10_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_10_std)
+plot(mCC_0_std_simres, sub="mPBl_10_std")#
+
+mPBl_11_std <- glmer(PBl01 ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_11_std)
+plot(mCC_0_std_simres, sub="mPBl_11_std")#
+
+
+mPBl_12_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_12_std)
+plot(mCC_0_std_simres, sub="mPBl_12_std")#
+
+mPBl_13_std <- glmer(PBl01 ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_13_std)
+plot(mCC_0_std_simres, sub="mPBl_13_std")#
+
+
+mPBl_14_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_14_std)
+plot(mCC_0_std_simres, sub="mPBl_14_std")#
+
+mPBl_15_std <- glmer(PBl01 ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_15_std)
+plot(mCC_0_std_simres, sub="mPBl_15_std")#
+
+mPBl_16_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_16_std)
+plot(mCC_0_std_simres, sub="mPBl_16_std")#
+
+mPBl_165_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_165_std)
+plot(mCC_0_std_simres, sub="mPBl_165_std")#
+
+mPBl_17_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_17_std)
+plot(mCC_0_std_simres, sub="mPBl_17_std")#
+
+mPBl_18_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_18_std)
+plot(mCC_0_std_simres, sub="mPBl_18_std")#
+
+mPBl_19_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_19_std)
+plot(mCC_0_std_simres, sub="mPBl_19_std")#
+
+mPBl_20_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_20_std)
+plot(mCC_0_std_simres, sub="mPBl_20_std")#
+
+mPBl_21_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_21_std)
+plot(mCC_0_std_simres, sub="mPBl_21_std")#
+
+mPBl_22_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_22_std)
+plot(mCC_0_std_simres, sub="mPBl_22_std")#
+
+
+#single main terms only
+mPBl_23_std <- glmer(PBl01 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_23_std)
+plot(mCC_0_std_simres, sub="mPBl_23_std")#
+
+mPBl_24_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_24_std)
+plot(mCC_0_std_simres, sub="mPBl_24_std")#
+
+mPBl_25_std <- glmer(PBl01 ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_25_std)
+plot(mCC_0_std_simres, sub="mPBl_25_std")#
+
+mPBl_26_std <- glmer(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_26_std)
+plot(mCC_0_std_simres, sub="mPBl_26_std")#
+
+mPBl_27_std <- glmer(PBl01 ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_27_std)
+plot(mCC_0_std_simres, sub="mPBl_27_std")#
+
+mPBl_28_std <- glmer(PBl01 ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_28_std)
+plot(mCC_0_std_simres, sub="mPBl_28_std")#
+
+mPBl_29_std <- glmer(PBl01 ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mPBl_29_std)
+plot(mCC_0_std_simres, sub="mPBl_29_std")#
+```
+
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+ # Create a list of models with those that failed to converge removed
+Pbl_models <- list(mPBl_0_std, mPBl_5_std,  mPBl_9_std, mPBl_10_std, mPBl_11_std,  mPBl_13_std, mPBl_14_std, mPBl_15_std, mPBl_16_std, mPBl_165_std, mPBl_17_std, mPBl_18_std,  mPBl_20_std, mPBl_21_std, mPBl_22_std, mPBl_23_std, mPBl_24_std, mPBl_25_std, mPBl_26_std,  mPBl_29_std) 
+mod.namesPBl <- c('mPBl0_std', 'mPBl_5_std', 'mPBl_9_std', 'mPBl_10_std', 'mPBl_11_std', 'mPBl_13_std', 'mPBl_14_std', 'mPBl_15_std', 'mPBl_16_std', 'mPBl_165_std', 'mPBl_17_std', 'mPBl_18_std', 'mPBl_20_std', 'mPBl_21_std', 'mPBl_22_std', 'mPBl_23_std', 'mPBl_24_std', 'mPBl_25_std', 'mPBl_26_std', 'mPBl_29_std') 
+
+# Calculate AIC for each model 
+Pbl_models_aic_table <- aictab(cand.set = Pbl_models, modnames=mod.namesPBl) 
+print(Pbl_models_aic_table)
+
+# Selected model
+summary(mPBl_16_std)
+```
+
+# Galls
+## Candidate models - standardized
+All good models, no difference in the AIC
+```{r,echo=FALSE}
+mGall_0_std <- glmer(Gall ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_0_std)
+plot(mCC_0_std_simres, sub="mGall_0_std")#
+
+mGall_1_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_1_std)
+plot(mCC_0_std_simres, sub="mGall_1_std")#
+
+mGall_2_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_2_std)
+plot(mCC_0_std_simres, sub="mGall_2_std")#
+
+mGall_3_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_3_std)
+plot(mCC_0_std_simres, sub="mGall_3_std")#
+
+mGall_4_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_4_std)
+plot(mCC_0_std_simres, sub="mGall_4_std")#
+
+mGall_45_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_45_std)
+plot(mCC_0_std_simres, sub="mGall_45_std")#
+
+mGall_5_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_5_std)
+plot(mCC_0_std_simres, sub="mGall_5_std")#
+
+mGall_6_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_6_std)
+plot(mCC_0_std_simres, sub="mGall_6_std")#
+ 
+mGall_7_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_7_std)
+plot(mCC_0_std_simres, sub="mGall_7_std")#
+
+mGall_8_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_8_std)
+plot(mCC_0_std_simres, sub="mGall_8_std")#
+
+#two main terms only
+mGall_9_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_9_std)
+plot(mCC_0_std_simres, sub="mGall_9_std")#
+
+mGall_10_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_10_std)
+plot(mCC_0_std_simres, sub="mGall_10_std")#
+
+mGall_11_std <- glmer(Gall ~ SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_11_std)
+plot(mCC_0_std_simres, sub="mGall_11_std")#
+
+
+mGall_12_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_12_std)
+plot(mCC_0_std_simres, sub="mGall_12_std")#
+
+mGall_13_std <- glmer(Gall ~ MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_13_std)
+plot(mCC_0_std_simres, sub="mGall_13_std")#
+
+
+mGall_14_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_14_std)
+plot(mCC_0_std_simres, sub="mGall_14_std")#
+ 
+mGall_15_std <- glmer(Gall ~  MAP_dist_std + I(MAP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_15_std)
+plot(mCC_0_std_simres, sub="mGall_15_std")#
+
+mGall_16_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_16_std)
+plot(mCC_0_std_simres, sub="mGall_16_std")#
+
+mGall_165_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_165_std)
+plot(mCC_0_std_simres, sub="mGall_165_std")#
+
+mGall_17_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_17_std)
+plot(mCC_0_std_simres, sub="mGall_17_std")#
+
+mGall_18_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_18_std)
+plot(mCC_0_std_simres, sub="mGall_18_std")#
+
+mGall_19_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_19_std)
+plot(mCC_0_std_simres, sub="mGall_19_std")#
+
+mGall_20_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_20_std)
+plot(mCC_0_std_simres, sub="mGall_20_std")#
+
+mGall_21_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_21_std)
+plot(mCC_0_std_simres, sub="mGall_21_std")#
+
+mGall_22_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_22_std)
+plot(mCC_0_std_simres, sub="mGall_22_std")#
+
+
+#single main terms only
+mGall_23_std <- glmer(Gall ~ MCMT_dist_std +  I(MCMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_23_std)
+plot(mCC_0_std_simres, sub="mGall_23_std")#
+
+mGall_24_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_24_std)
+plot(mCC_0_std_simres, sub="mGall_24_std")#
+ 
+mGall_25_std <- glmer(Gall ~  MAP_dist_std + I(MAP_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_25_std)
+plot(mCC_0_std_simres, sub="mGall_25_std")#
+
+mGall_26_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_26_std)
+plot(mCC_0_std_simres, sub="mGall_26_std")#
+
+mGall_27_std <- glmer(Gall ~  MSP_dist_std + I(MSP_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_27_std)
+plot(mCC_0_std_simres, sub="mGall_27_std")#
+
+mGall_28_std <- glmer(Gall ~  TD_dist_std + I(TD_dist_std^2)  + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_28_std)
+plot(mCC_0_std_simres, sub="mGall_28_std")#
+
+mGall_29_std <- glmer(Gall ~  SHM_dist_std + I(SHM_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+mCC_0_std_simres <- simulateResiduals(mGall_29_std)
+plot(mCC_0_std_simres, sub="mGall_29_std")#
+```
+
+## Compare models
+List includes only models that converged/meet assumptions
+```{r,echo=FALSE}
+ # Create a list of models 
+Gall_modelsUP <- list(mGall_0_std, mGall_45_std, mGall_5_std, mGall_7_std, mGall_9_std,  mGall_10_std, mGall_12_std, mGall_14_std,  mGall_16_std,  mGall_17_std, mGall_19_std, mGall_20_std, mGall_21_std, mGall_22_std, mGall_23_std, mGall_24_std, mGall_25_std, mGall_26_std, mGall_27_std, mGall_28_std, mGall_29_std) 
+mod.namesUP <- c('mGall_0_std', 'mGall_45_std', 'mGall_5_std',  'mGall_7_std', 'mGall_9_std','mGall_10_std', 'mGall_12_std', 'mGall_14_std',  'mGall_16_std',  'mGall_17_std',  'mGall_19_std', 'mGall_20_std', 'mGall_21_std', 'mGall_22_std', 'mGall_23_std', 'mGall_24_std', 'mGall_25_std', 'mGall_26_std', 'mGall_27_std', 'mGall_28_std', 'mGall_29_std') 
+
+# Calculate AIC for each model 
+Gall_models_aic_tableUP <- aictab(cand.set = Gall_modelsUP, modnames=mod.namesUP) 
+print(Gall_models_aic_tableUP)
+
+#Selected model
+summary(mGall_19_std)
+```
+
+
+
+
+
