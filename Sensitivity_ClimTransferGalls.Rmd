@@ -1,0 +1,1117 @@
+---
+title: "Sensitivity Climate Transfer Distance Galls"
+author: "Michelle C. Agne"
+date: "2026-10-05"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(corrplot)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(AICcmodavg)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(glmmTMB)
+```
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) %>%
+  mutate(LD = as.factor(if_else(TS == 1, "L",
+                      if_else(TS == 2, "L",
+                              if_else(TS == 3, "L","D")))))
+field_climate_08_23_inc$Unique_ID <- seq_len(nrow(field_climate_08_23_inc))
+
+field_climate_08_23_inc$MCMT_dist_std <- (field_climate_08_23_inc$MCMT_dist - mean(field_climate_08_23_inc$MCMT_dist))/(2*sd(field_climate_08_23_inc$MCMT_dist))
+field_climate_08_23_inc$MWMT_dist_std <- (field_climate_08_23_inc$MWMT_dist - mean(field_climate_08_23_inc$MWMT_dist))/(2*sd(field_climate_08_23_inc$MWMT_dist))
+field_climate_08_23_inc$MSP_dist_std <- (field_climate_08_23_inc$MSP_dist - mean(field_climate_08_23_inc$MSP_dist))/(2*sd(field_climate_08_23_inc$MSP_dist))
+field_climate_08_23_inc$TD_dist_std <- (field_climate_08_23_inc$TD_dist - mean(field_climate_08_23_inc$TD_dist))/(2*sd(field_climate_08_23_inc$TD_dist))
+field_climate_08_23_inc$SHM_dist_std <- (field_climate_08_23_inc$SHM_dist - mean(field_climate_08_23_inc$SHM_dist))/(2*sd(field_climate_08_23_inc$SHM_dist))
+field_climate_08_23_inc$MAT_dist_std <- (field_climate_08_23_inc$MAT_dist - mean(field_climate_08_23_inc$MAT_dist))/(2*sd(field_climate_08_23_inc$MAT_dist))
+
+live_trees <- field_climate_08_23_inc %>% filter(TS==1|TS==2|TS==3) #7881 live trees assessed
+
+dead_trees <- field_climate_08_23_inc %>%filter(LD=='D')  %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+# 329 dead trees assessed for sunken bole, pitching on bole, galls
+```
+
+# Galls
+## Percentiles of interest
+0 - 0
+0.5x - 16
+1x - 32
+2x - 65
+3x - 97
+
+
+## Sim 1
+```{r,echo=FALSE}
+set.seed(25)
+#0x - 0 trees
+gallrand_0 <- dead_trees[sample(nrow(dead_trees), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gallrand_05 <- dead_trees[sample(nrow(dead_trees), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gallrand_1 <- dead_trees[sample(nrow(dead_trees), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gallrand_2 <- dead_trees[sample(nrow(dead_trees), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gallrand_3 <- dead_trees[sample(nrow(dead_trees), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sensDD_join <- left_join(dead_trees,gallrand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gallrand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gallrand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gallrand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gallrand_3, by=c("Unique_ID","LD")) 
+
+gall_sensDD_repl <- gall_sensDD_join %>%
+  mutate(gallrand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gallrand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gallrand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gallrand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gallrand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_wDD_sims <- left_join(field_climate_08_23_inc,gall_sensDD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gallrand_0:gallrand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_wDD_sims$TD_dist_std <- (tmp_gall_wDD_sims$TD_dist - mean(tmp_gall_wDD_sims$TD_dist))/(2*sd(tmp_gall_wDD_sims$TD_dist))
+tmp_gall_wDD_sims$MWMT_dist_std <- (tmp_gall_wDD_sims$MWMT_dist - mean(tmp_gall_wDD_sims$MWMT_dist))/(2*sd(tmp_gall_wDD_sims$MWMT_dist))
+tmp_gall_wDD_sims$SHM_dist_std <- (tmp_gall_wDD_sims$SHM_dist - mean(tmp_gall_wDD_sims$SHM_dist))/(2*sd(tmp_gall_wDD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall.OG <- glmmTMB(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23_inc, family = binomial(link = "logit"))
+
+modgall.DD0xboth<- glmmTMB(Gall ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23_inc, family = binomial(link = "logit"))
+
+modgall1.DD0x <- glmmTMB(gallrand_0 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+modgall1.DD05x <- glmmTMB(gallrand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+modgall1.DD1x <- glmmTMB(gallrand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+modgall.DD1xhigh <- glmmTMB(gallrand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+modgall1.DD2x <- glmmTMB(gallrand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+modgall.DD2xlow <- glmmTMB(gallrand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+
+modgall1.DD3x <- glmmTMB(gallrand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_wDD_sims, family = binomial(link = "logit"))
+
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+modgallOG_df<-tidy(modgall.OG, conf.int = TRUE, effects = "fixed")
+modgallOG_df$model <- "OG"
+modgallOG_df$multoplier <- "Original model"
+
+sim1gall0x_df<-tidy(modgall1.DD0x, conf.int = TRUE, effects = "fixed")
+sim1gall0x_df$model <- "Sim 1"
+sim1gall0x_df$multoplier <- "0"
+
+sim1gall05x_df<-tidy(modgall1.DD05x, conf.int = TRUE, effects = "fixed")
+sim1gall05x_df$model <- "Sim 1"
+sim1gall05x_df$multoplier <- "0.5x"
+
+sim1gall1x_df<-tidy(modgall1.DD1x, conf.int = TRUE, effects = "fixed")
+sim1gall1x_df$model <- "Sim 1"
+sim1gall1x_df$multoplier <- "1x"
+
+sim1gall2x_df<-tidy(modgall1.DD2x, conf.int = TRUE, effects = "fixed")
+sim1gall2x_df$model <- "Sim 1"
+sim1gall2x_df$multoplier <- "2x"
+
+sim1gall3x_df<-tidy(modgall1.DD3x, conf.int = TRUE, effects = "fixed")
+sim1gall3x_df$model <- "Sim 1"
+sim1gall3x_df$multoplier <- "3x"
+```
+
+## Sim 2
+```{r,echo=FALSE}
+dead_trees2 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+
+set.seed(51)
+#0x - 0 trees
+gall2rand_0 <- dead_trees2[sample(nrow(dead_trees2), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall2rand_05 <- dead_trees2[sample(nrow(dead_trees2), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall2rand_1 <- dead_trees2[sample(nrow(dead_trees2), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall2rand_2 <- dead_trees2[sample(nrow(dead_trees2), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall2rand_3 <- dead_trees2[sample(nrow(dead_trees2), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens2DD_join <- left_join(dead_trees2,gall2rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall2rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall2rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall2rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall2rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens2DD_repl <- gall_sens2DD_join %>%
+  mutate(gall2rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall2rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall2rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall2rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall2rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+tmp_gall_w2DD_sims <- left_join(field_climate_08_23_inc,gall_sens2DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall2rand_0:gall2rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w2DD_sims$TD_dist_std <- (tmp_gall_w2DD_sims$TD_dist - mean(tmp_gall_w2DD_sims$TD_dist))/(2*sd(tmp_gall_w2DD_sims$TD_dist))
+tmp_gall_w2DD_sims$MWMT_dist_std <- (tmp_gall_w2DD_sims$MWMT_dist - mean(tmp_gall_w2DD_sims$MWMT_dist))/(2*sd(tmp_gall_w2DD_sims$MWMT_dist))
+tmp_gall_w2DD_sims$SHM_dist_std <- (tmp_gall_w2DD_sims$SHM_dist - mean(tmp_gall_w2DD_sims$SHM_dist))/(2*sd(tmp_gall_w2DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall2.DD05x <- glmmTMB(gall2rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w2DD_sims, family = binomial(link = "logit"))
+
+modgall.DD05xlow <- glmmTMB(gall2rand_05 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w2DD_sims, family = binomial(link = "logit"))
+
+modgall2.DD1x <- glmmTMB(gall2rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w2DD_sims, family = binomial(link = "logit"))
+
+modgall2.DD2x <- glmmTMB(gall2rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w2DD_sims, family = binomial(link = "logit"))
+
+modgall2.DD3x <- glmmTMB(gall2rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w2DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim2gall05x_df<-tidy(modgall2.DD05x, conf.int = TRUE, effects = "fixed")
+sim2gall05x_df$model <- "Sim 2"
+sim2gall05x_df$multoplier <- "0.5x"
+
+sim2gall1x_df<-tidy(modgall2.DD1x, conf.int = TRUE, effects = "fixed")
+sim2gall1x_df$model <- "Sim 2"
+sim2gall1x_df$multoplier <- "1x"
+
+sim2gall2x_df<-tidy(modgall2.DD2x, conf.int = TRUE, effects = "fixed")
+sim2gall2x_df$model <- "Sim 2"
+sim2gall2x_df$multoplier <- "2x"
+
+sim2gall3x_df<-tidy(modgall2.DD3x, conf.int = TRUE, effects = "fixed")
+sim2gall3x_df$model <- "Sim 2"
+sim2gall3x_df$multoplier <- "3x"
+```
+
+## Sim 3
+```{r,echo=FALSE}
+dead_trees3 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(75)
+#0x - 0 trees
+gall3rand_0 <- dead_trees3[sample(nrow(dead_trees3), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall3rand_05 <- dead_trees3[sample(nrow(dead_trees3), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall3rand_1 <- dead_trees3[sample(nrow(dead_trees3), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall3rand_2 <- dead_trees3[sample(nrow(dead_trees3), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall3rand_3 <- dead_trees3[sample(nrow(dead_trees3), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens3DD_join <- left_join(dead_trees3,gall3rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall3rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall3rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall3rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall3rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens3DD_repl <- gall_sens3DD_join %>%
+  mutate(gall3rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall3rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall3rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall3rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall3rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w3DD_sims <- left_join(field_climate_08_23_inc,gall_sens3DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall3rand_0:gall3rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w3DD_sims$TD_dist_std <- (tmp_gall_w3DD_sims$TD_dist - mean(tmp_gall_w3DD_sims$TD_dist))/(2*sd(tmp_gall_w3DD_sims$TD_dist))
+tmp_gall_w3DD_sims$MWMT_dist_std <- (tmp_gall_w3DD_sims$MWMT_dist - mean(tmp_gall_w3DD_sims$MWMT_dist))/(2*sd(tmp_gall_w3DD_sims$MWMT_dist))
+tmp_gall_w3DD_sims$SHM_dist_std <- (tmp_gall_w3DD_sims$SHM_dist - mean(tmp_gall_w3DD_sims$SHM_dist))/(2*sd(tmp_gall_w3DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall3.DD05x <- glmmTMB(gall3rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w3DD_sims, family = binomial(link = "logit"))
+
+modgall3.DD1x <- glmmTMB(gall3rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w3DD_sims, family = binomial(link = "logit"))
+
+modgall3.DD2x <- glmmTMB(gall3rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w3DD_sims, family = binomial(link = "logit"))
+
+modgall3.DD3x <- glmmTMB(gall3rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w3DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim3gall05x_df<-tidy(modgall3.DD05x, conf.int = TRUE, effects = "fixed")
+sim3gall05x_df$model <- "Sim 3"
+sim3gall05x_df$multoplier <- "0.5x"
+
+sim3gall1x_df<-tidy(modgall3.DD1x, conf.int = TRUE, effects = "fixed")
+sim3gall1x_df$model <- "Sim 3"
+sim3gall1x_df$multoplier <- "1x"
+
+sim3gall2x_df<-tidy(modgall3.DD2x, conf.int = TRUE, effects = "fixed")
+sim3gall2x_df$model <- "Sim 3"
+sim3gall2x_df$multoplier <- "2x"
+
+sim3gall3x_df<-tidy(modgall3.DD3x, conf.int = TRUE, effects = "fixed")
+sim3gall3x_df$model <- "Sim 3"
+sim3gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 4
+```{r,echo=FALSE}
+dead_trees4 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(41)
+#0x - 0 trees
+gall4rand_0 <- dead_trees4[sample(nrow(dead_trees4), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall4rand_05 <- dead_trees4[sample(nrow(dead_trees4), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall4rand_1 <- dead_trees4[sample(nrow(dead_trees4), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall4rand_2 <- dead_trees4[sample(nrow(dead_trees4), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall4rand_3 <- dead_trees4[sample(nrow(dead_trees4), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens4DD_join <- left_join(dead_trees4,gall4rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall4rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall4rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall4rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall4rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens4DD_repl <- gall_sens4DD_join %>%
+  mutate(gall4rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall4rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall4rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall4rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall4rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w4DD_sims <- left_join(field_climate_08_23_inc,gall_sens4DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall4rand_0:gall4rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w4DD_sims$TD_dist_std <- (tmp_gall_w4DD_sims$TD_dist - mean(tmp_gall_w4DD_sims$TD_dist))/(2*sd(tmp_gall_w4DD_sims$TD_dist))
+tmp_gall_w4DD_sims$MWMT_dist_std <- (tmp_gall_w4DD_sims$MWMT_dist - mean(tmp_gall_w4DD_sims$MWMT_dist))/(2*sd(tmp_gall_w4DD_sims$MWMT_dist))
+tmp_gall_w4DD_sims$SHM_dist_std <- (tmp_gall_w4DD_sims$SHM_dist - mean(tmp_gall_w4DD_sims$SHM_dist))/(2*sd(tmp_gall_w4DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall4.DD05x <- glmmTMB(gall4rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w4DD_sims, family = binomial(link = "logit"))
+
+modgall4.DD1x <- glmmTMB(gall4rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w4DD_sims, family = binomial(link = "logit"))
+
+modgall4.DD2x <- glmmTMB(gall4rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w4DD_sims, family = binomial(link = "logit"))
+
+modgall4.DD3x <- glmmTMB(gall4rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w4DD_sims, family = binomial(link = "logit"))
+
+modgall.DD3xlow <- glmmTMB(gall4rand_3 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w4DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim4gall05x_df<-tidy(modgall4.DD05x, conf.int = TRUE, effects = "fixed")
+sim4gall05x_df$model <- "Sim 4"
+sim4gall05x_df$multoplier <- "0.5x"
+
+sim4gall1x_df<-tidy(modgall4.DD1x, conf.int = TRUE, effects = "fixed")
+sim4gall1x_df$model <- "Sim 4"
+sim4gall1x_df$multoplier <- "1x"
+
+sim4gall2x_df<-tidy(modgall4.DD2x, conf.int = TRUE, effects = "fixed")
+sim4gall2x_df$model <- "Sim 4"
+sim4gall2x_df$multoplier <- "2x"
+
+sim4gall3x_df<-tidy(modgall4.DD3x, conf.int = TRUE, effects = "fixed")
+sim4gall3x_df$model <- "Sim 4"
+sim4gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 5
+```{r,echo=FALSE}
+dead_trees5 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(101)
+#0x - 0 trees
+gall5rand_0 <- dead_trees5[sample(nrow(dead_trees5), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall5rand_05 <- dead_trees5[sample(nrow(dead_trees5), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall5rand_1 <- dead_trees5[sample(nrow(dead_trees5), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall5rand_2 <- dead_trees5[sample(nrow(dead_trees5), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall5rand_3 <- dead_trees5[sample(nrow(dead_trees5), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens5DD_join <- left_join(dead_trees5,gall5rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall5rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall5rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall5rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall5rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens5DD_repl <- gall_sens5DD_join %>%
+  mutate(gall5rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall5rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall5rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall5rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall5rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w5DD_sims <- left_join(field_climate_08_23_inc,gall_sens5DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall5rand_0:gall5rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w5DD_sims$TD_dist_std <- (tmp_gall_w5DD_sims$TD_dist - mean(tmp_gall_w5DD_sims$TD_dist))/(2*sd(tmp_gall_w5DD_sims$TD_dist))
+tmp_gall_w5DD_sims$MWMT_dist_std <- (tmp_gall_w5DD_sims$MWMT_dist - mean(tmp_gall_w5DD_sims$MWMT_dist))/(2*sd(tmp_gall_w5DD_sims$MWMT_dist))
+tmp_gall_w5DD_sims$SHM_dist_std <- (tmp_gall_w5DD_sims$SHM_dist - mean(tmp_gall_w5DD_sims$SHM_dist))/(2*sd(tmp_gall_w5DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall5.DD05x <- glmmTMB(gall5rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w5DD_sims, family = binomial(link = "logit"))
+
+modgall5.DD1x <- glmmTMB(gall5rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w5DD_sims, family = binomial(link = "logit"))
+
+modgall5.DD2x <- glmmTMB(gall5rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w5DD_sims, family = binomial(link = "logit"))
+
+modgall5.DD3x <- glmmTMB(gall5rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w5DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim5gall05x_df<-tidy(modgall5.DD05x, conf.int = TRUE, effects = "fixed")
+sim5gall05x_df$model <- "Sim 5"
+sim5gall05x_df$multoplier <- "0.5x"
+
+sim5gall1x_df<-tidy(modgall5.DD1x, conf.int = TRUE, effects = "fixed")
+sim5gall1x_df$model <- "Sim 5"
+sim5gall1x_df$multoplier <- "1x"
+
+sim5gall2x_df<-tidy(modgall5.DD2x, conf.int = TRUE, effects = "fixed")
+sim5gall2x_df$model <- "Sim 5"
+sim5gall2x_df$multoplier <- "2x"
+
+sim5gall3x_df<-tidy(modgall5.DD3x, conf.int = TRUE, effects = "fixed")
+sim5gall3x_df$model <- "Sim 5"
+sim5gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 6
+```{r,echo=FALSE}
+dead_trees6 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(80)
+#0x - 0 trees
+gall6rand_0 <- dead_trees6[sample(nrow(dead_trees6), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall6rand_05 <- dead_trees6[sample(nrow(dead_trees6), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall6rand_1 <- dead_trees6[sample(nrow(dead_trees6), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall6rand_2 <- dead_trees6[sample(nrow(dead_trees6), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall6rand_3 <- dead_trees6[sample(nrow(dead_trees6), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens6DD_join <- left_join(dead_trees6,gall6rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall6rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall6rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall6rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall6rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens6DD_repl <- gall_sens6DD_join %>%
+  mutate(gall6rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall6rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall6rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall6rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall6rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w6DD_sims <- left_join(field_climate_08_23_inc,gall_sens6DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall6rand_0:gall6rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w6DD_sims$TD_dist_std <- (tmp_gall_w6DD_sims$TD_dist - mean(tmp_gall_w6DD_sims$TD_dist))/(2*sd(tmp_gall_w6DD_sims$TD_dist))
+tmp_gall_w6DD_sims$MWMT_dist_std <- (tmp_gall_w6DD_sims$MWMT_dist - mean(tmp_gall_w6DD_sims$MWMT_dist))/(2*sd(tmp_gall_w6DD_sims$MWMT_dist))
+tmp_gall_w6DD_sims$SHM_dist_std <- (tmp_gall_w6DD_sims$SHM_dist - mean(tmp_gall_w6DD_sims$SHM_dist))/(2*sd(tmp_gall_w6DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall6.DD05x <- glmmTMB(gall6rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w6DD_sims, family = binomial(link = "logit"))
+
+modgall6.DD1x <- glmmTMB(gall6rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w6DD_sims, family = binomial(link = "logit"))
+
+modgall6.DD2x <- glmmTMB(gall6rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w6DD_sims, family = binomial(link = "logit"))
+
+modgall.DD2xhigh <- glmmTMB(gall6rand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w6DD_sims, family = binomial(link = "logit"))
+
+
+modgall6.DD3x <- glmmTMB(gall6rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w6DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim6gall05x_df<-tidy(modgall6.DD05x, conf.int = TRUE, effects = "fixed")
+sim6gall05x_df$model <- "Sim 6"
+sim6gall05x_df$multoplier <- "0.5x"
+
+sim6gall1x_df<-tidy(modgall6.DD1x, conf.int = TRUE, effects = "fixed")
+sim6gall1x_df$model <- "Sim 6"
+sim6gall1x_df$multoplier <- "1x"
+
+sim6gall2x_df<-tidy(modgall6.DD2x, conf.int = TRUE, effects = "fixed")
+sim6gall2x_df$model <- "Sim 6"
+sim6gall2x_df$multoplier <- "2x"
+
+sim6gall3x_df<-tidy(modgall6.DD3x, conf.int = TRUE, effects = "fixed")
+sim6gall3x_df$model <- "Sim 6"
+sim6gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 7
+```{r,echo=FALSE}
+dead_trees7 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(125)
+#0x - 0 trees
+gall7rand_0 <- dead_trees7[sample(nrow(dead_trees7), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall7rand_05 <- dead_trees7[sample(nrow(dead_trees7), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall7rand_1 <- dead_trees7[sample(nrow(dead_trees7), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall7rand_2 <- dead_trees7[sample(nrow(dead_trees7), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall7rand_3 <- dead_trees7[sample(nrow(dead_trees7), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens7DD_join <- left_join(dead_trees7,gall7rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall7rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall7rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall7rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall7rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens7DD_repl <- gall_sens7DD_join %>%
+  mutate(gall7rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall7rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall7rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall7rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall7rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w7DD_sims <- left_join(field_climate_08_23_inc,gall_sens7DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall7rand_0:gall7rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w7DD_sims$TD_dist_std <- (tmp_gall_w7DD_sims$TD_dist - mean(tmp_gall_w7DD_sims$TD_dist))/(2*sd(tmp_gall_w7DD_sims$TD_dist))
+tmp_gall_w7DD_sims$MWMT_dist_std <- (tmp_gall_w7DD_sims$MWMT_dist - mean(tmp_gall_w7DD_sims$MWMT_dist))/(2*sd(tmp_gall_w7DD_sims$MWMT_dist))
+tmp_gall_w7DD_sims$SHM_dist_std <- (tmp_gall_w7DD_sims$SHM_dist - mean(tmp_gall_w7DD_sims$SHM_dist))/(2*sd(tmp_gall_w7DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall7.DD05x <- glmmTMB(gall7rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w7DD_sims, family = binomial(link = "logit"))
+
+modgall7.DD1x <- glmmTMB(gall7rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w7DD_sims, family = binomial(link = "logit"))
+
+modgall7.DD2x <- glmmTMB(gall7rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w7DD_sims, family = binomial(link = "logit"))
+
+modgall7.DD3x <- glmmTMB(gall7rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w7DD_sims, family = binomial(link = "logit"))
+
+modgall.DD3xhigh <- glmmTMB(gall7rand_3 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w7DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim7gall05x_df<-tidy(modgall7.DD05x, conf.int = TRUE, effects = "fixed")
+sim7gall05x_df$model <- "Sim 7"
+sim7gall05x_df$multoplier <- "0.5x"
+
+sim7gall1x_df<-tidy(modgall7.DD1x, conf.int = TRUE, effects = "fixed")
+sim7gall1x_df$model <- "Sim 7"
+sim7gall1x_df$multoplier <- "1x"
+
+sim7gall2x_df<-tidy(modgall7.DD2x, conf.int = TRUE, effects = "fixed")
+sim7gall2x_df$model <- "Sim 7"
+sim7gall2x_df$multoplier <- "2x"
+
+sim7gall3x_df<-tidy(modgall7.DD3x, conf.int = TRUE, effects = "fixed")
+sim7gall3x_df$model <- "Sim 7"
+sim7gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 8
+```{r,echo=FALSE}
+dead_trees8 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(106)
+#0x - 0 trees
+gall8rand_0 <- dead_trees8[sample(nrow(dead_trees8), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall8rand_05 <- dead_trees8[sample(nrow(dead_trees8), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall8rand_1 <- dead_trees8[sample(nrow(dead_trees8), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall8rand_2 <- dead_trees8[sample(nrow(dead_trees8), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall8rand_3 <- dead_trees8[sample(nrow(dead_trees8), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens8DD_join <- left_join(dead_trees8,gall8rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall8rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall8rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall8rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall8rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens8DD_repl <- gall_sens8DD_join %>%
+  mutate(gall8rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall8rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall8rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall8rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall8rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w8DD_sims <- left_join(field_climate_08_23_inc,gall_sens8DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall8rand_0:gall8rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w8DD_sims$TD_dist_std <- (tmp_gall_w8DD_sims$TD_dist - mean(tmp_gall_w8DD_sims$TD_dist))/(2*sd(tmp_gall_w8DD_sims$TD_dist))
+tmp_gall_w8DD_sims$MWMT_dist_std <- (tmp_gall_w8DD_sims$MWMT_dist - mean(tmp_gall_w8DD_sims$MWMT_dist))/(2*sd(tmp_gall_w8DD_sims$MWMT_dist))
+tmp_gall_w8DD_sims$SHM_dist_std <- (tmp_gall_w8DD_sims$SHM_dist - mean(tmp_gall_w8DD_sims$SHM_dist))/(2*sd(tmp_gall_w8DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall8.DD05x <- glmmTMB(gall8rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w8DD_sims, family = binomial(link = "logit"))
+
+modgall8.DD1x <- glmmTMB(gall8rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w8DD_sims, family = binomial(link = "logit"))
+
+modgall.DD1xlow <- glmmTMB(gall8rand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w8DD_sims, family = binomial(link = "logit"))
+
+modgall8.DD2x <- glmmTMB(gall8rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w8DD_sims, family = binomial(link = "logit"))
+
+modgall8.DD3x <- glmmTMB(gall8rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w8DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim8gall05x_df<-tidy(modgall8.DD05x, conf.int = TRUE, effects = "fixed")
+sim8gall05x_df$model <- "Sim 8"
+sim8gall05x_df$multoplier <- "0.5x"
+
+sim8gall1x_df<-tidy(modgall8.DD1x, conf.int = TRUE, effects = "fixed")
+sim8gall1x_df$model <- "Sim 8"
+sim8gall1x_df$multoplier <- "1x"
+
+sim8gall2x_df<-tidy(modgall8.DD2x, conf.int = TRUE, effects = "fixed")
+sim8gall2x_df$model <- "Sim 8"
+sim8gall2x_df$multoplier <- "2x"
+
+sim8gall3x_df<-tidy(modgall8.DD3x, conf.int = TRUE, effects = "fixed")
+sim8gall3x_df$model <- "Sim 8"
+sim8gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 9
+```{r,echo=FALSE}
+dead_trees9 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(38)
+#0x - 0 trees
+gall9rand_0 <- dead_trees9[sample(nrow(dead_trees9), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall9rand_05 <- dead_trees9[sample(nrow(dead_trees9), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall9rand_1 <- dead_trees9[sample(nrow(dead_trees9), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall9rand_2 <- dead_trees9[sample(nrow(dead_trees9), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall9rand_3 <- dead_trees9[sample(nrow(dead_trees9), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens9DD_join <- left_join(dead_trees9,gall9rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall9rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall9rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall9rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall9rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens9DD_repl <- gall_sens9DD_join %>%
+  mutate(gall9rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall9rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall9rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall9rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall9rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w9DD_sims <- left_join(field_climate_08_23_inc,gall_sens9DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall9rand_0:gall9rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w9DD_sims$TD_dist_std <- (tmp_gall_w9DD_sims$TD_dist - mean(tmp_gall_w9DD_sims$TD_dist))/(2*sd(tmp_gall_w9DD_sims$TD_dist))
+tmp_gall_w9DD_sims$MWMT_dist_std <- (tmp_gall_w9DD_sims$MWMT_dist - mean(tmp_gall_w9DD_sims$MWMT_dist))/(2*sd(tmp_gall_w9DD_sims$MWMT_dist))
+tmp_gall_w9DD_sims$SHM_dist_std <- (tmp_gall_w9DD_sims$SHM_dist - mean(tmp_gall_w9DD_sims$SHM_dist))/(2*sd(tmp_gall_w9DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall9.DD05x <- glmmTMB(gall9rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w9DD_sims, family = binomial(link = "logit"))
+
+modgall.DD05xhigh <- glmmTMB(gall9rand_05 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w9DD_sims, family = binomial(link = "logit"))
+
+modgall9.DD1x <- glmmTMB(gall9rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w9DD_sims, family = binomial(link = "logit"))
+
+modgall9.DD2x <- glmmTMB(gall9rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w9DD_sims, family = binomial(link = "logit"))
+
+modgall9.DD3x <- glmmTMB(gall9rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w9DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim9gall05x_df<-tidy(modgall9.DD05x, conf.int = TRUE, effects = "fixed")
+sim9gall05x_df$model <- "Sim 9"
+sim9gall05x_df$multoplier <- "0.5x"
+
+sim9gall1x_df<-tidy(modgall9.DD1x, conf.int = TRUE, effects = "fixed")
+sim9gall1x_df$model <- "Sim 9"
+sim9gall1x_df$multoplier <- "1x"
+
+sim9gall2x_df<-tidy(modgall9.DD2x, conf.int = TRUE, effects = "fixed")
+sim9gall2x_df$model <- "Sim 9"
+sim9gall2x_df$multoplier <- "2x"
+
+sim9gall3x_df<-tidy(modgall9.DD3x, conf.int = TRUE, effects = "fixed")
+sim9gall3x_df$model <- "Sim 9"
+sim9gall3x_df$multoplier <- "3x"
+```
+
+
+## Sim 10
+```{r,echo=FALSE}
+dead_trees10 <- field_climate_08_23_inc %>%filter(LD=='D') %>%filter(is.na(SnkBl)) %>%dplyr::select("Unique_ID","LD")
+set.seed(145)
+#0x - 0 trees
+gall10rand_0 <- dead_trees10[sample(nrow(dead_trees10), size=0), ] %>% mutate(gall_0 = 1)
+
+#0.5x - 83 trees
+gall10rand_05 <- dead_trees10[sample(nrow(dead_trees10), size=16), ] %>% mutate(gall_05 = 1)
+
+#1x - 165 trees
+gall10rand_1 <- dead_trees10[sample(nrow(dead_trees10), size=32), ] %>% mutate(gall_1 = 1)
+
+#2x - 331 trees
+gall10rand_2 <- dead_trees10[sample(nrow(dead_trees10), size=65), ] %>% mutate(gall_2 = 1)
+
+#3x - 496 trees
+gall10rand_3 <- dead_trees10[sample(nrow(dead_trees10), size=44), ] %>% mutate(gall_3 = 1)
+
+
+gall_sens10DD_join <- left_join(dead_trees10,gall10rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall10rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall10rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall10rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,gall10rand_3, by=c("Unique_ID","LD")) 
+
+gall_sens10DD_repl <- gall_sens10DD_join %>%
+  mutate(gall10rand_0 = if_else(is.na(gall_0),0, gall_0))%>%
+  mutate(gall10rand_05 = if_else(is.na(gall_05),0, gall_05))%>%
+  mutate(gall10rand_1 = if_else(is.na(gall_1),0, gall_1))%>%
+  mutate(gall10rand_2 = if_else(is.na(gall_2),0, gall_2))%>%
+  mutate(gall10rand_3 = if_else(is.na(gall_3),0, gall_3))
+
+
+tmp_gall_w10DD_sims <- left_join(field_climate_08_23_inc,gall_sens10DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(gall10rand_0:gall10rand_3), ~ ifelse(is.na(.), Gall, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_gall_w10DD_sims$TD_dist_std <- (tmp_gall_w10DD_sims$TD_dist - mean(tmp_gall_w10DD_sims$TD_dist))/(2*sd(tmp_gall_w10DD_sims$TD_dist))
+tmp_gall_w10DD_sims$MWMT_dist_std <- (tmp_gall_w10DD_sims$MWMT_dist - mean(tmp_gall_w10DD_sims$MWMT_dist))/(2*sd(tmp_gall_w10DD_sims$MWMT_dist))
+tmp_gall_w10DD_sims$SHM_dist_std <- (tmp_gall_w10DD_sims$SHM_dist - mean(tmp_gall_w10DD_sims$SHM_dist))/(2*sd(tmp_gall_w10DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modgall10.DD05x <- glmmTMB(gall10rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w10DD_sims, family = binomial(link = "logit"))
+
+modgall10.DD1x <- glmmTMB(gall10rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w10DD_sims, family = binomial(link = "logit"))
+
+modgall.DD1xhigh <- glmmTMB(gall10rand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w10DD_sims, family = binomial(link = "logit"))
+
+modgall10.DD2x <- glmmTMB(gall10rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w10DD_sims, family = binomial(link = "logit"))
+
+modgall.DD2xhigh <- glmmTMB(gall10rand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w10DD_sims, family = binomial(link = "logit"))
+
+modgall10.DD3x <- glmmTMB(gall10rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_gall_w10DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim10gall05x_df<-tidy(modgall10.DD05x, conf.int = TRUE, effects = "fixed")
+sim10gall05x_df$model <- "Sim 10"
+sim10gall05x_df$multoplier <- "0.5x"
+
+sim10gall1x_df<-tidy(modgall10.DD1x, conf.int = TRUE, effects = "fixed")
+sim10gall1x_df$model <- "Sim 10"
+sim10gall1x_df$multoplier <- "1x"
+
+sim10gall2x_df<-tidy(modgall10.DD2x, conf.int = TRUE, effects = "fixed")
+sim10gall2x_df$model <- "Sim 10"
+sim10gall2x_df$multoplier <- "2x"
+
+sim10gall3x_df<-tidy(modgall10.DD3x, conf.int = TRUE, effects = "fixed")
+sim10gall3x_df$model <- "Sim 10"
+sim10gall3x_df$multoplier <- "3x"
+```
+
+## All coefs
+```{r,echo=FALSE}
+gallcoefs_ALL <- bind_rows(modgallOG_df,sim1gall0x_df,sim1gall05x_df,sim1gall1x_df,sim1gall2x_df,sim1gall3x_df,
+                      sim2gall05x_df,sim2gall1x_df,sim2gall2x_df,sim2gall3x_df,
+                       sim3gall05x_df,sim3gall1x_df,sim3gall2x_df,sim3gall3x_df,
+                       sim4gall05x_df,sim4gall1x_df,sim4gall2x_df,sim4gall3x_df,
+                       sim5gall05x_df,sim5gall1x_df,sim5gall2x_df,sim5gall3x_df,
+                      sim6gall05x_df,sim6gall1x_df,sim6gall2x_df,sim6gall3x_df,
+                     sim7gall05x_df,sim7gall1x_df,sim7gall2x_df,sim7gall3x_df,
+                   sim8gall05x_df,sim8gall1x_df,sim8gall2x_df,sim8gall3x_df,
+                       sim9gall05x_df,sim9gall1x_df,sim9gall2x_df,sim9gall3x_df,
+                       sim10gall05x_df,sim10gall1x_df,sim10gall2x_df,sim10gall3x_df) %>% rename(Simulation = model)
+
+gallcoefs_ALL$model <- seq_len(nrow(gallcoefs_ALL))
+write.csv(gallcoefs_ALL, "gallProb_sim_coefs.csv")
+```
+
+## Coefficient plots
+```{r,echo=FALSE}
+gallcoefs_ALL <- read.csv("gallProb_sim_coefs.csv")%>% mutate(term = fct_relevel(term, "(Intercept)", "I(TD_dist_std^2)","TD_dist_std","I(SHM_dist_std^2)","SHM_dist_std","I(MWMT_dist_std^2)","MWMT_dist_std")) %>%
+  mutate(multoplier = fct_relevel(multoplier, "0","0.5x","1x","2x","3x", "Original model")) 
+
+
+pal5_t <- turbo(5, alpha=1, begin=0.2, end=1)
+pal6 <- c("#3E9BFEFF", "#46F884FF", "#E1DD37FF", "#F05B12FF", "#7A0403FF","gray")
+
+(coefgall<- gallcoefs_ALL %>% filter(term !="(Intercept)") %>% 
+              ggplot(aes(estimate, term, color=multoplier, xmin=conf.low,xmax = conf.high)) + 
+    theme_classic()+
+ 
+    geom_errorbar(position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+      geom_point(aes(color=multoplier),
+  fill="black",alpha=0.3,pch=21, position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+   scale_color_manual("Multiplier",values=pal6,labels = c('0x', '0.5x', '1x','2x','3x',"Original model"))+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y =NULL, title="Probability of bacterial galls")+
+   scale_y_discrete(labels = c(expression(paste("TD"^"2")),"TD",expression(paste("SHM"^"2")),"SHM",expression(paste("MWMT"^"2")),"MWMT"))+
+  theme(legend.position="none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11)))
+ggsave(coefgall, file="SSMT_FH_gall_Sensitivity_coefs_title.png", dpi=600, height=6, width=6)
+```
+
+
+### Prediction data
+```{r, echo=FALSE, warning=FALSE}
+mydfLD_gall0<-ggpredict(modgall.DD0xboth, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_gall05low<-ggpredict(modgall.DD05xlow, terms =c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_gall05high<-ggpredict(modgall.DD05xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_gall1low<-ggpredict(modgall.DD1xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_gall1high<-ggpredict(modgall.DD1xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_gall2low<-ggpredict(modgall.DD2xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_gall2high<-ggpredict(modgall.DD2xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_gall3low<-ggpredict(modgall.DD3xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_gall3high<-ggpredict(modgall.DD3xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+```
+
+### Prediction plots
+```{r,echo=FALSE}
+palMSPnew <- c("#A36B2BFF","#94B9A7FF","#2686A0FF")
+palTDnew <- c("#2686A0FF", "#94B9A7FF", "#C6AA74FF", "#A36B2BFF")
+
+
+(pgall0<-ggplot(mydfLD_gall0, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew,guide= "none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew,guide= "none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of bacterial galls", title="0x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall05low<-ggplot(mydfLD_gall05low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of bacterial galls", title="0.5x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall05high<-ggplot(mydfLD_gall05high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="0.5x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall1low<-ggplot(mydfLD_gall1low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of bacterial galls", title="1x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall1high<-ggplot(mydfLD_gall1high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="1x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall2low<-ggplot(mydfLD_gall2low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of bacterial galls", title="2x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall2high<-ggplot(mydfLD_gall2high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="2x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall3low<-ggplot(mydfLD_gall3low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",
+         y ="Probability of bacterial galls", title="3x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pgall3high<-ggplot(mydfLD_gall3high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",
+         y =NULL, title="3x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Multipanel
+```{r,echo=FALSE}
+Figgallsensmult <- (pgall0|plot_spacer())/(pgall05low|pgall05high)/(pgall1low|pgall1high)/(pgall2low|pgall2high)/(pgall3low|pgall3high)
+Figgallsensmultann <- Figgallsensmult + plot_annotation(tag_levels = c("a"))
+
+ggsave(Figgallsensmultann, file="SSMT_FH_gall_pred_Sensitivity.png", dpi=600, height=10.5, width=7)
+```
+
+

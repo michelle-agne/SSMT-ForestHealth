@@ -1,0 +1,1120 @@
+---
+title: "Sensitivity Climate Transfer Distance Tip dieback"
+author: "Michelle C. Agne"
+date: "2026-10-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(corrplot)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(AICcmodavg)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(glmmTMB)
+```
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) %>%
+  mutate(LD = as.factor(if_else(TS == 1, "L",
+                      if_else(TS == 2, "L",
+                              if_else(TS == 3, "L","D")))))
+field_climate_08_23_inc$Unique_ID <- seq_len(nrow(field_climate_08_23_inc))
+
+field_climate_08_23_inc$MCMT_dist_std <- (field_climate_08_23_inc$MCMT_dist - mean(field_climate_08_23_inc$MCMT_dist))/(2*sd(field_climate_08_23_inc$MCMT_dist))
+field_climate_08_23_inc$MWMT_dist_std <- (field_climate_08_23_inc$MWMT_dist - mean(field_climate_08_23_inc$MWMT_dist))/(2*sd(field_climate_08_23_inc$MWMT_dist))
+field_climate_08_23_inc$MSP_dist_std <- (field_climate_08_23_inc$MSP_dist - mean(field_climate_08_23_inc$MSP_dist))/(2*sd(field_climate_08_23_inc$MSP_dist))
+field_climate_08_23_inc$TD_dist_std <- (field_climate_08_23_inc$TD_dist - mean(field_climate_08_23_inc$TD_dist))/(2*sd(field_climate_08_23_inc$TD_dist))
+field_climate_08_23_inc$SHM_dist_std <- (field_climate_08_23_inc$SHM_dist - mean(field_climate_08_23_inc$SHM_dist))/(2*sd(field_climate_08_23_inc$SHM_dist))
+field_climate_08_23_inc$MAT_dist_std <- (field_climate_08_23_inc$MAT_dist - mean(field_climate_08_23_inc$MAT_dist))/(2*sd(field_climate_08_23_inc$MAT_dist))
+
+live_trees <- field_climate_08_23_inc %>% filter(TS==1|TS==2|TS==3) #7881 live trees assessed
+
+dead_trees <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+# 302 dead trees assessed for sunken bole, pitching on bole, galls
+```
+
+# Tip dieback
+## Percentiles of interest
+0 - 0
+0.5x - 38
+1x - 75
+2x - 150
+3x - 225
+
+## Sim 1
+```{r,echo=FALSE}
+set.seed(25)
+#0x - 0 trees
+tipdbrand_0 <- dead_trees[sample(nrow(dead_trees), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdbrand_05 <- dead_trees[sample(nrow(dead_trees), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdbrand_1 <- dead_trees[sample(nrow(dead_trees), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdbrand_2 <- dead_trees[sample(nrow(dead_trees), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdbrand_3 <- dead_trees[sample(nrow(dead_trees), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sensDD_join <- left_join(dead_trees,tipdbrand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdbrand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdbrand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdbrand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdbrand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sensDD_repl <- tipdb_sensDD_join %>%
+  mutate(tipdbrand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdbrand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdbrand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdbrand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdbrand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_wDD_sims <- left_join(field_climate_08_23_inc,tipdb_sensDD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdbrand_0:tipdbrand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_wDD_sims$TD_dist_std <- (tmp_tipdb_wDD_sims$TD_dist - mean(tmp_tipdb_wDD_sims$TD_dist))/(2*sd(tmp_tipdb_wDD_sims$TD_dist))
+tmp_tipdb_wDD_sims$MWMT_dist_std <- (tmp_tipdb_wDD_sims$MWMT_dist - mean(tmp_tipdb_wDD_sims$MWMT_dist))/(2*sd(tmp_tipdb_wDD_sims$MWMT_dist))
+tmp_tipdb_wDD_sims$SHM_dist_std <- (tmp_tipdb_wDD_sims$SHM_dist - mean(tmp_tipdb_wDD_sims$SHM_dist))/(2*sd(tmp_tipdb_wDD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb.OG <- glmmTMB(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23_inc, family = binomial(link = "logit"))
+
+modtipdb1.DD0x <- glmmTMB(tipdbrand_0 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+
+modtipdb1.DD05x <- glmmTMB(tipdbrand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD0xboth <- glmmTMB(tipdbrand_0 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD05xlow <- glmmTMB(tipdbrand_05 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+
+
+modtipdb1.DD1x <- glmmTMB(tipdbrand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+
+modtipdb1.DD2x <- glmmTMB(tipdbrand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+
+modtipdb1.DD3x <- glmmTMB(tipdbrand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+modtipdbOG_df<-tidy(modtipdb.OG, conf.int = TRUE, effects = "fixed")
+modtipdbOG_df$model <- "OG"
+modtipdbOG_df$multiplier <- "Original model"
+
+sim1tipdb0x_df<-tidy(modtipdb1.DD0x, conf.int = TRUE, effects = "fixed")
+sim1tipdb0x_df$model <- "Sim 1"
+sim1tipdb0x_df$multiplier <- "0"
+
+sim1tipdb05x_df<-tidy(modtipdb1.DD05x, conf.int = TRUE, effects = "fixed")
+sim1tipdb05x_df$model <- "Sim 1"
+sim1tipdb05x_df$multiplier <- "0.5x"
+
+sim1tipdb1x_df<-tidy(modtipdb1.DD1x, conf.int = TRUE, effects = "fixed")
+sim1tipdb1x_df$model <- "Sim 1"
+sim1tipdb1x_df$multiplier <- "1x"
+
+sim1tipdb2x_df<-tidy(modtipdb1.DD2x, conf.int = TRUE, effects = "fixed")
+sim1tipdb2x_df$model <- "Sim 1"
+sim1tipdb2x_df$multiplier <- "2x"
+
+sim1tipdb3x_df<-tidy(modtipdb1.DD3x, conf.int = TRUE, effects = "fixed")
+sim1tipdb3x_df$model <- "Sim 1"
+sim1tipdb3x_df$multiplier <- "3x"
+```
+
+## Sim 2
+```{r,echo=FALSE}
+dead_trees2 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+
+set.seed(51)
+#0x - 0 trees
+tipdb2rand_0 <- dead_trees2[sample(nrow(dead_trees2), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb2rand_05 <- dead_trees2[sample(nrow(dead_trees2), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb2rand_1 <- dead_trees2[sample(nrow(dead_trees2), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb2rand_2 <- dead_trees2[sample(nrow(dead_trees2), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb2rand_3 <- dead_trees2[sample(nrow(dead_trees2), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens2DD_join <- left_join(dead_trees2,tipdb2rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb2rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb2rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb2rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb2rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens2DD_repl <- tipdb_sens2DD_join %>%
+  mutate(tipdb2rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb2rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb2rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb2rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb2rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+tmp_tipdb_w2DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens2DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb2rand_0:tipdb2rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w2DD_sims$TD_dist_std <- (tmp_tipdb_w2DD_sims$TD_dist - mean(tmp_tipdb_w2DD_sims$TD_dist))/(2*sd(tmp_tipdb_w2DD_sims$TD_dist))
+tmp_tipdb_w2DD_sims$MWMT_dist_std <- (tmp_tipdb_w2DD_sims$MWMT_dist - mean(tmp_tipdb_w2DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w2DD_sims$MWMT_dist))
+tmp_tipdb_w2DD_sims$SHM_dist_std <- (tmp_tipdb_w2DD_sims$SHM_dist - mean(tmp_tipdb_w2DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w2DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb2.DD05x <- glmmTMB(tipdb2rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w2DD_sims, family = binomial(link = "logit"))
+
+modtipdb2.DD1x <- glmmTMB(tipdb2rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w2DD_sims, family = binomial(link = "logit"))
+
+modtipdb2.DD2x <- glmmTMB(tipdb2rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w2DD_sims, family = binomial(link = "logit"))
+
+modtipdb2.DD3x <- glmmTMB(tipdb2rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w2DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim2tipdb05x_df<-tidy(modtipdb2.DD05x, conf.int = TRUE, effects = "fixed")
+sim2tipdb05x_df$model <- "Sim 2"
+sim2tipdb05x_df$multiplier <- "0.5x"
+
+sim2tipdb1x_df<-tidy(modtipdb2.DD1x, conf.int = TRUE, effects = "fixed")
+sim2tipdb1x_df$model <- "Sim 2"
+sim2tipdb1x_df$multiplier <- "1x"
+
+sim2tipdb2x_df<-tidy(modtipdb2.DD2x, conf.int = TRUE, effects = "fixed")
+sim2tipdb2x_df$model <- "Sim 2"
+sim2tipdb2x_df$multiplier <- "2x"
+
+sim2tipdb3x_df<-tidy(modtipdb2.DD3x, conf.int = TRUE, effects = "fixed")
+sim2tipdb3x_df$model <- "Sim 2"
+sim2tipdb3x_df$multiplier <- "3x"
+```
+
+## Sim 3
+```{r,echo=FALSE}
+dead_trees3 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(75)
+#0x - 0 trees
+tipdb3rand_0 <- dead_trees3[sample(nrow(dead_trees3), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb3rand_05 <- dead_trees3[sample(nrow(dead_trees3), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb3rand_1 <- dead_trees3[sample(nrow(dead_trees3), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb3rand_2 <- dead_trees3[sample(nrow(dead_trees3), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb3rand_3 <- dead_trees3[sample(nrow(dead_trees3), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens3DD_join <- left_join(dead_trees3,tipdb3rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb3rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb3rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb3rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb3rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens3DD_repl <- tipdb_sens3DD_join %>%
+  mutate(tipdb3rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb3rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb3rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb3rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb3rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w3DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens3DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb3rand_0:tipdb3rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w3DD_sims$TD_dist_std <- (tmp_tipdb_w3DD_sims$TD_dist - mean(tmp_tipdb_w3DD_sims$TD_dist))/(2*sd(tmp_tipdb_w3DD_sims$TD_dist))
+tmp_tipdb_w3DD_sims$MWMT_dist_std <- (tmp_tipdb_w3DD_sims$MWMT_dist - mean(tmp_tipdb_w3DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w3DD_sims$MWMT_dist))
+tmp_tipdb_w3DD_sims$SHM_dist_std <- (tmp_tipdb_w3DD_sims$SHM_dist - mean(tmp_tipdb_w3DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w3DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb3.DD05x <- glmmTMB(tipdb3rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtipdb3.DD1x <- glmmTMB(tipdb3rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD1xhigh <- glmmTMB(tipdb3rand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w3DD_sims, family = binomial(link = "logit"))
+
+
+modtipdb3.DD2x <- glmmTMB(tipdb3rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtipdb3.DD3x <- glmmTMB(tipdb3rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w3DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim3tipdb05x_df<-tidy(modtipdb3.DD05x, conf.int = TRUE, effects = "fixed")
+sim3tipdb05x_df$model <- "Sim 3"
+sim3tipdb05x_df$multiplier <- "0.5x"
+
+sim3tipdb1x_df<-tidy(modtipdb3.DD1x, conf.int = TRUE, effects = "fixed")
+sim3tipdb1x_df$model <- "Sim 3"
+sim3tipdb1x_df$multiplier <- "1x"
+
+sim3tipdb2x_df<-tidy(modtipdb3.DD2x, conf.int = TRUE, effects = "fixed")
+sim3tipdb2x_df$model <- "Sim 3"
+sim3tipdb2x_df$multiplier <- "2x"
+
+sim3tipdb3x_df<-tidy(modtipdb3.DD3x, conf.int = TRUE, effects = "fixed")
+sim3tipdb3x_df$model <- "Sim 3"
+sim3tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 4
+```{r,echo=FALSE}
+dead_trees4 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(41)
+#0x - 0 trees
+tipdb4rand_0 <- dead_trees4[sample(nrow(dead_trees4), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb4rand_05 <- dead_trees4[sample(nrow(dead_trees4), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb4rand_1 <- dead_trees4[sample(nrow(dead_trees4), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb4rand_2 <- dead_trees4[sample(nrow(dead_trees4), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb4rand_3 <- dead_trees4[sample(nrow(dead_trees4), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens4DD_join <- left_join(dead_trees4,tipdb4rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb4rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb4rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb4rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb4rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens4DD_repl <- tipdb_sens4DD_join %>%
+  mutate(tipdb4rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb4rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb4rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb4rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb4rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w4DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens4DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb4rand_0:tipdb4rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w4DD_sims$TD_dist_std <- (tmp_tipdb_w4DD_sims$TD_dist - mean(tmp_tipdb_w4DD_sims$TD_dist))/(2*sd(tmp_tipdb_w4DD_sims$TD_dist))
+tmp_tipdb_w4DD_sims$MWMT_dist_std <- (tmp_tipdb_w4DD_sims$MWMT_dist - mean(tmp_tipdb_w4DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w4DD_sims$MWMT_dist))
+tmp_tipdb_w4DD_sims$SHM_dist_std <- (tmp_tipdb_w4DD_sims$SHM_dist - mean(tmp_tipdb_w4DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w4DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb4.DD05x <- glmmTMB(tipdb4rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtipdb4.DD1x <- glmmTMB(tipdb4rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD1xlow <- glmmTMB(tipdb4rand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtipdb4.DD2x <- glmmTMB(tipdb4rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtipdb4.DD3x <- glmmTMB(tipdb4rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w4DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim4tipdb05x_df<-tidy(modtipdb4.DD05x, conf.int = TRUE, effects = "fixed")
+sim4tipdb05x_df$model <- "Sim 4"
+sim4tipdb05x_df$multiplier <- "0.5x"
+
+sim4tipdb1x_df<-tidy(modtipdb4.DD1x, conf.int = TRUE, effects = "fixed")
+sim4tipdb1x_df$model <- "Sim 4"
+sim4tipdb1x_df$multiplier <- "1x"
+
+sim4tipdb2x_df<-tidy(modtipdb4.DD2x, conf.int = TRUE, effects = "fixed")
+sim4tipdb2x_df$model <- "Sim 4"
+sim4tipdb2x_df$multiplier <- "2x"
+
+sim4tipdb3x_df<-tidy(modtipdb4.DD3x, conf.int = TRUE, effects = "fixed")
+sim4tipdb3x_df$model <- "Sim 4"
+sim4tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 5
+```{r,echo=FALSE}
+dead_trees5 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(101)
+#0x - 0 trees
+tipdb5rand_0 <- dead_trees5[sample(nrow(dead_trees5), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb5rand_05 <- dead_trees5[sample(nrow(dead_trees5), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb5rand_1 <- dead_trees5[sample(nrow(dead_trees5), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb5rand_2 <- dead_trees5[sample(nrow(dead_trees5), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb5rand_3 <- dead_trees5[sample(nrow(dead_trees5), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens5DD_join <- left_join(dead_trees5,tipdb5rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb5rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb5rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb5rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb5rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens5DD_repl <- tipdb_sens5DD_join %>%
+  mutate(tipdb5rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb5rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb5rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb5rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb5rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w5DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens5DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb5rand_0:tipdb5rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w5DD_sims$TD_dist_std <- (tmp_tipdb_w5DD_sims$TD_dist - mean(tmp_tipdb_w5DD_sims$TD_dist))/(2*sd(tmp_tipdb_w5DD_sims$TD_dist))
+tmp_tipdb_w5DD_sims$MWMT_dist_std <- (tmp_tipdb_w5DD_sims$MWMT_dist - mean(tmp_tipdb_w5DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w5DD_sims$MWMT_dist))
+tmp_tipdb_w5DD_sims$SHM_dist_std <- (tmp_tipdb_w5DD_sims$SHM_dist - mean(tmp_tipdb_w5DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w5DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb5.DD05x <- glmmTMB(tipdb5rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtipdb5.DD1x <- glmmTMB(tipdb5rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtipdb5.DD2x <- glmmTMB(tipdb5rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtipdb5.DD3x <- glmmTMB(tipdb5rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD3xlow <- glmmTMB(tipdb5rand_3 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w5DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim5tipdb05x_df<-tidy(modtipdb5.DD05x, conf.int = TRUE, effects = "fixed")
+sim5tipdb05x_df$model <- "Sim 5"
+sim5tipdb05x_df$multiplier <- "0.5x"
+
+sim5tipdb1x_df<-tidy(modtipdb5.DD1x, conf.int = TRUE, effects = "fixed")
+sim5tipdb1x_df$model <- "Sim 5"
+sim5tipdb1x_df$multiplier <- "1x"
+
+sim5tipdb2x_df<-tidy(modtipdb5.DD2x, conf.int = TRUE, effects = "fixed")
+sim5tipdb2x_df$model <- "Sim 5"
+sim5tipdb2x_df$multiplier <- "2x"
+
+sim5tipdb3x_df<-tidy(modtipdb5.DD3x, conf.int = TRUE, effects = "fixed")
+sim5tipdb3x_df$model <- "Sim 5"
+sim5tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 6
+```{r,echo=FALSE}
+dead_trees6 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(80)
+#0x - 0 trees
+tipdb6rand_0 <- dead_trees6[sample(nrow(dead_trees6), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb6rand_05 <- dead_trees6[sample(nrow(dead_trees6), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb6rand_1 <- dead_trees6[sample(nrow(dead_trees6), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb6rand_2 <- dead_trees6[sample(nrow(dead_trees6), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb6rand_3 <- dead_trees6[sample(nrow(dead_trees6), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens6DD_join <- left_join(dead_trees6,tipdb6rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb6rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb6rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb6rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb6rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens6DD_repl <- tipdb_sens6DD_join %>%
+  mutate(tipdb6rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb6rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb6rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb6rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb6rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w6DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens6DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb6rand_0:tipdb6rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w6DD_sims$TD_dist_std <- (tmp_tipdb_w6DD_sims$TD_dist - mean(tmp_tipdb_w6DD_sims$TD_dist))/(2*sd(tmp_tipdb_w6DD_sims$TD_dist))
+tmp_tipdb_w6DD_sims$MWMT_dist_std <- (tmp_tipdb_w6DD_sims$MWMT_dist - mean(tmp_tipdb_w6DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w6DD_sims$MWMT_dist))
+tmp_tipdb_w6DD_sims$SHM_dist_std <- (tmp_tipdb_w6DD_sims$SHM_dist - mean(tmp_tipdb_w6DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w6DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb6.DD05x <- glmmTMB(tipdb6rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtipdb6.DD1x <- glmmTMB(tipdb6rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtipdb6.DD2x <- glmmTMB(tipdb6rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD2xhigh <- glmmTMB(tipdb6rand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtipdb6.DD3x <- glmmTMB(tipdb6rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w6DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim6tipdb05x_df<-tidy(modtipdb6.DD05x, conf.int = TRUE, effects = "fixed")
+sim6tipdb05x_df$model <- "Sim 6"
+sim6tipdb05x_df$multiplier <- "0.5x"
+
+sim6tipdb1x_df<-tidy(modtipdb6.DD1x, conf.int = TRUE, effects = "fixed")
+sim6tipdb1x_df$model <- "Sim 6"
+sim6tipdb1x_df$multiplier <- "1x"
+
+sim6tipdb2x_df<-tidy(modtipdb6.DD2x, conf.int = TRUE, effects = "fixed")
+sim6tipdb2x_df$model <- "Sim 6"
+sim6tipdb2x_df$multiplier <- "2x"
+
+sim6tipdb3x_df<-tidy(modtipdb6.DD3x, conf.int = TRUE, effects = "fixed")
+sim6tipdb3x_df$model <- "Sim 6"
+sim6tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 7
+```{r,echo=FALSE}
+dead_trees7 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(125)
+#0x - 0 trees
+tipdb7rand_0 <- dead_trees7[sample(nrow(dead_trees7), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb7rand_05 <- dead_trees7[sample(nrow(dead_trees7), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb7rand_1 <- dead_trees7[sample(nrow(dead_trees7), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb7rand_2 <- dead_trees7[sample(nrow(dead_trees7), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb7rand_3 <- dead_trees7[sample(nrow(dead_trees7), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens7DD_join <- left_join(dead_trees7,tipdb7rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb7rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb7rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb7rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb7rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens7DD_repl <- tipdb_sens7DD_join %>%
+  mutate(tipdb7rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb7rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb7rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb7rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb7rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w7DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens7DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb7rand_0:tipdb7rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w7DD_sims$TD_dist_std <- (tmp_tipdb_w7DD_sims$TD_dist - mean(tmp_tipdb_w7DD_sims$TD_dist))/(2*sd(tmp_tipdb_w7DD_sims$TD_dist))
+tmp_tipdb_w7DD_sims$MWMT_dist_std <- (tmp_tipdb_w7DD_sims$MWMT_dist - mean(tmp_tipdb_w7DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w7DD_sims$MWMT_dist))
+tmp_tipdb_w7DD_sims$SHM_dist_std <- (tmp_tipdb_w7DD_sims$SHM_dist - mean(tmp_tipdb_w7DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w7DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb7.DD05x <- glmmTMB(tipdb7rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w7DD_sims, family = binomial(link = "logit"))
+
+modtipdb7.DD1x <- glmmTMB(tipdb7rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w7DD_sims, family = binomial(link = "logit"))
+
+modtipdb7.DD2x <- glmmTMB(tipdb7rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w7DD_sims, family = binomial(link = "logit"))
+
+modtipdb7.DD3x <- glmmTMB(tipdb7rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w7DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim7tipdb05x_df<-tidy(modtipdb7.DD05x, conf.int = TRUE, effects = "fixed")
+sim7tipdb05x_df$model <- "Sim 7"
+sim7tipdb05x_df$multiplier <- "0.5x"
+
+sim7tipdb1x_df<-tidy(modtipdb7.DD1x, conf.int = TRUE, effects = "fixed")
+sim7tipdb1x_df$model <- "Sim 7"
+sim7tipdb1x_df$multiplier <- "1x"
+
+sim7tipdb2x_df<-tidy(modtipdb7.DD2x, conf.int = TRUE, effects = "fixed")
+sim7tipdb2x_df$model <- "Sim 7"
+sim7tipdb2x_df$multiplier <- "2x"
+
+sim7tipdb3x_df<-tidy(modtipdb7.DD3x, conf.int = TRUE, effects = "fixed")
+sim7tipdb3x_df$model <- "Sim 7"
+sim7tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 8
+```{r,echo=FALSE}
+dead_trees8 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(106)
+#0x - 0 trees
+tipdb8rand_0 <- dead_trees8[sample(nrow(dead_trees8), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb8rand_05 <- dead_trees8[sample(nrow(dead_trees8), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb8rand_1 <- dead_trees8[sample(nrow(dead_trees8), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb8rand_2 <- dead_trees8[sample(nrow(dead_trees8), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb8rand_3 <- dead_trees8[sample(nrow(dead_trees8), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens8DD_join <- left_join(dead_trees8,tipdb8rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb8rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb8rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb8rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb8rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens8DD_repl <- tipdb_sens8DD_join %>%
+  mutate(tipdb8rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb8rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb8rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb8rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb8rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w8DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens8DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb8rand_0:tipdb8rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w8DD_sims$TD_dist_std <- (tmp_tipdb_w8DD_sims$TD_dist - mean(tmp_tipdb_w8DD_sims$TD_dist))/(2*sd(tmp_tipdb_w8DD_sims$TD_dist))
+tmp_tipdb_w8DD_sims$MWMT_dist_std <- (tmp_tipdb_w8DD_sims$MWMT_dist - mean(tmp_tipdb_w8DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w8DD_sims$MWMT_dist))
+tmp_tipdb_w8DD_sims$SHM_dist_std <- (tmp_tipdb_w8DD_sims$SHM_dist - mean(tmp_tipdb_w8DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w8DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb8.DD05x <- glmmTMB(tipdb8rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w8DD_sims, family = binomial(link = "logit"))
+
+modtipdb8.DD1x <- glmmTMB(tipdb8rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w8DD_sims, family = binomial(link = "logit"))
+
+modtipdb8.DD2x <- glmmTMB(tipdb8rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w8DD_sims, family = binomial(link = "logit"))
+
+modtipdb8.DD3x <- glmmTMB(tipdb8rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w8DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim8tipdb05x_df<-tidy(modtipdb8.DD05x, conf.int = TRUE, effects = "fixed")
+sim8tipdb05x_df$model <- "Sim 8"
+sim8tipdb05x_df$multiplier <- "0.5x"
+
+sim8tipdb1x_df<-tidy(modtipdb8.DD1x, conf.int = TRUE, effects = "fixed")
+sim8tipdb1x_df$model <- "Sim 8"
+sim8tipdb1x_df$multiplier <- "1x"
+
+sim8tipdb2x_df<-tidy(modtipdb8.DD2x, conf.int = TRUE, effects = "fixed")
+sim8tipdb2x_df$model <- "Sim 8"
+sim8tipdb2x_df$multiplier <- "2x"
+
+sim8tipdb3x_df<-tidy(modtipdb8.DD3x, conf.int = TRUE, effects = "fixed")
+sim8tipdb3x_df$model <- "Sim 8"
+sim8tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 9
+```{r,echo=FALSE}
+dead_trees9 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(38)
+#0x - 0 trees
+tipdb9rand_0 <- dead_trees9[sample(nrow(dead_trees9), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb9rand_05 <- dead_trees9[sample(nrow(dead_trees9), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb9rand_1 <- dead_trees9[sample(nrow(dead_trees9), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb9rand_2 <- dead_trees9[sample(nrow(dead_trees9), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb9rand_3 <- dead_trees9[sample(nrow(dead_trees9), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens9DD_join <- left_join(dead_trees9,tipdb9rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb9rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb9rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb9rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb9rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens9DD_repl <- tipdb_sens9DD_join %>%
+  mutate(tipdb9rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb9rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb9rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb9rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb9rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w9DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens9DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb9rand_0:tipdb9rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w9DD_sims$TD_dist_std <- (tmp_tipdb_w9DD_sims$TD_dist - mean(tmp_tipdb_w9DD_sims$TD_dist))/(2*sd(tmp_tipdb_w9DD_sims$TD_dist))
+tmp_tipdb_w9DD_sims$MWMT_dist_std <- (tmp_tipdb_w9DD_sims$MWMT_dist - mean(tmp_tipdb_w9DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w9DD_sims$MWMT_dist))
+tmp_tipdb_w9DD_sims$SHM_dist_std <- (tmp_tipdb_w9DD_sims$SHM_dist - mean(tmp_tipdb_w9DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w9DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb9.DD05x <- glmmTMB(tipdb9rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtipdb9.DD1x <- glmmTMB(tipdb9rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtipdb9.DD2x <- glmmTMB(tipdb9rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD2xlow <- glmmTMB(tipdb9rand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtipdb9.DD3x <- glmmTMB(tipdb9rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD3xhigh <- glmmTMB(tipdb9rand_3 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w9DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim9tipdb05x_df<-tidy(modtipdb9.DD05x, conf.int = TRUE, effects = "fixed")
+sim9tipdb05x_df$model <- "Sim 9"
+sim9tipdb05x_df$multiplier <- "0.5x"
+
+sim9tipdb1x_df<-tidy(modtipdb9.DD1x, conf.int = TRUE, effects = "fixed")
+sim9tipdb1x_df$model <- "Sim 9"
+sim9tipdb1x_df$multiplier <- "1x"
+
+sim9tipdb2x_df<-tidy(modtipdb9.DD2x, conf.int = TRUE, effects = "fixed")
+sim9tipdb2x_df$model <- "Sim 9"
+sim9tipdb2x_df$multiplier <- "2x"
+
+sim9tipdb3x_df<-tidy(modtipdb9.DD3x, conf.int = TRUE, effects = "fixed")
+sim9tipdb3x_df$model <- "Sim 9"
+sim9tipdb3x_df$multiplier <- "3x"
+```
+
+
+## Sim 10
+```{r,echo=FALSE}
+dead_trees10 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(145)
+#0x - 0 trees
+tipdb10rand_0 <- dead_trees10[sample(nrow(dead_trees10), size=0), ] %>% mutate(tipdb_0 = 1)
+
+#0.5x - 83 trees
+tipdb10rand_05 <- dead_trees10[sample(nrow(dead_trees10), size=38), ] %>% mutate(tipdb_05 = 1)
+
+#1x - 165 trees
+tipdb10rand_1 <- dead_trees10[sample(nrow(dead_trees10), size=75), ] %>% mutate(tipdb_1 = 1)
+
+#2x - 331 trees
+tipdb10rand_2 <- dead_trees10[sample(nrow(dead_trees10), size=150), ] %>% mutate(tipdb_2 = 1)
+
+#3x - 496 trees
+tipdb10rand_3 <- dead_trees10[sample(nrow(dead_trees10), size=225), ] %>% mutate(tipdb_3 = 1)
+
+
+tipdb_sens10DD_join <- left_join(dead_trees10,tipdb10rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb10rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb10rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb10rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,tipdb10rand_3, by=c("Unique_ID","LD")) 
+
+tipdb_sens10DD_repl <- tipdb_sens10DD_join %>%
+  mutate(tipdb10rand_0 = if_else(is.na(tipdb_0),0, tipdb_0))%>%
+  mutate(tipdb10rand_05 = if_else(is.na(tipdb_05),0, tipdb_05))%>%
+  mutate(tipdb10rand_1 = if_else(is.na(tipdb_1),0, tipdb_1))%>%
+  mutate(tipdb10rand_2 = if_else(is.na(tipdb_2),0, tipdb_2))%>%
+  mutate(tipdb10rand_3 = if_else(is.na(tipdb_3),0, tipdb_3))
+
+
+tmp_tipdb_w10DD_sims <- left_join(field_climate_08_23_inc,tipdb_sens10DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(tipdb10rand_0:tipdb10rand_3), ~ ifelse(is.na(.), TipDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_tipdb_w10DD_sims$TD_dist_std <- (tmp_tipdb_w10DD_sims$TD_dist - mean(tmp_tipdb_w10DD_sims$TD_dist))/(2*sd(tmp_tipdb_w10DD_sims$TD_dist))
+tmp_tipdb_w10DD_sims$MWMT_dist_std <- (tmp_tipdb_w10DD_sims$MWMT_dist - mean(tmp_tipdb_w10DD_sims$MWMT_dist))/(2*sd(tmp_tipdb_w10DD_sims$MWMT_dist))
+tmp_tipdb_w10DD_sims$SHM_dist_std <- (tmp_tipdb_w10DD_sims$SHM_dist - mean(tmp_tipdb_w10DD_sims$SHM_dist))/(2*sd(tmp_tipdb_w10DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtipdb10.DD05x <- glmmTMB(tipdb10rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtipdb.DD05xhigh <- glmmTMB(tipdb10rand_05 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtipdb10.DD1x <- glmmTMB(tipdb10rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtipdb10.DD2x <- glmmTMB(tipdb10rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtipdb10.DD3x <- glmmTMB(tipdb10rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_tipdb_w10DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim10tipdb05x_df<-tidy(modtipdb10.DD05x, conf.int = TRUE, effects = "fixed")
+sim10tipdb05x_df$model <- "Sim 10"
+sim10tipdb05x_df$multiplier <- "0.5x"
+
+sim10tipdb1x_df<-tidy(modtipdb10.DD1x, conf.int = TRUE, effects = "fixed")
+sim10tipdb1x_df$model <- "Sim 10"
+sim10tipdb1x_df$multiplier <- "1x"
+
+sim10tipdb2x_df<-tidy(modtipdb10.DD2x, conf.int = TRUE, effects = "fixed")
+sim10tipdb2x_df$model <- "Sim 10"
+sim10tipdb2x_df$multiplier <- "2x"
+
+sim10tipdb3x_df<-tidy(modtipdb10.DD3x, conf.int = TRUE, effects = "fixed")
+sim10tipdb3x_df$model <- "Sim 10"
+sim10tipdb3x_df$multiplier <- "3x"
+```
+
+## All coefs
+```{r,echo=FALSE}
+tipdbcoefs_ALL <- bind_rows(modtipdbOG_df,sim1tipdb0x_df,sim1tipdb05x_df,sim1tipdb1x_df,sim1tipdb2x_df,sim1tipdb3x_df,
+                      sim2tipdb05x_df,sim2tipdb1x_df,sim2tipdb2x_df,sim2tipdb3x_df,
+                       sim3tipdb05x_df,sim3tipdb1x_df,sim3tipdb2x_df,sim3tipdb3x_df,
+                       sim4tipdb05x_df,sim4tipdb1x_df,sim4tipdb2x_df,sim4tipdb3x_df,
+                       sim5tipdb05x_df,sim5tipdb1x_df,sim5tipdb2x_df,sim5tipdb3x_df,
+                      sim6tipdb05x_df,sim6tipdb1x_df,sim6tipdb2x_df,sim6tipdb3x_df,
+                     sim7tipdb05x_df,sim7tipdb1x_df,sim7tipdb2x_df,sim7tipdb3x_df,
+                   sim8tipdb05x_df,sim8tipdb1x_df,sim8tipdb2x_df,sim8tipdb3x_df,
+                       sim9tipdb05x_df,sim9tipdb1x_df,sim9tipdb2x_df,sim9tipdb3x_df,
+                       sim10tipdb05x_df,sim10tipdb1x_df,sim10tipdb2x_df,sim10tipdb3x_df) %>% rename(Simulation = model)
+
+tipdbcoefs_ALL$model <- seq_len(nrow(tipdbcoefs_ALL))
+write.csv(tipdbcoefs_ALL, "TipDiebackProb_sim_coefs.csv")
+```
+
+## Coefficient plots
+```{r,echo=FALSE}
+tipdbcoefs_ALL <- read.csv("TipDiebackProb_sim_coefs.csv")%>% mutate(term = fct_relevel(term, "(Intercept)", "I(TD_dist_std^2)","TD_dist_std","I(SHM_dist_std^2)","SHM_dist_std","I(MWMT_dist_std^2)","MWMT_dist_std")) %>%
+  mutate(multiplier = fct_relevel(multiplier, "0","0.5x","1x","2x","3x", "Original model")) 
+
+
+pal5_t <- turbo(5, alpha=1, begin=0.2, end=1)
+pal6 <- c("#3E9BFEFF", "#46F884FF", "#E1DD37FF", "#F05B12FF", "#7A0403FF","gray")
+
+(coeftipdb<- tipdbcoefs_ALL %>% filter(term !="(Intercept)") %>% 
+              ggplot(aes(estimate, term, color=multiplier, xmin=conf.low,xmax = conf.high)) + 
+    theme_classic()+
+ 
+    geom_errorbar(position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+      geom_point(aes(color=multiplier),
+  fill="black",alpha=0.3,pch=21, position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+   scale_color_manual("Multiplier",values=pal6,labels = c('0x', '0.5x', '1x','2x','3x',"Original model"))+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y =NULL, title="Probability of tip dieback")+
+   scale_y_discrete(labels = c(expression(paste("TD"^"2")),"TD",expression(paste("SHM"^"2")),"SHM",expression(paste("MWMT"^"2")),"MWMT"))+
+     theme(legend.position=c(0.25,0.7),legend.background=element_blank(),
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11)))
+ggsave(coeftipdb, file="SSMT_FH_tipdb_Sensitivity_coefs_title.png", dpi=600, height=6, width=6)
+```
+
+### Prediction data
+```{r, echo=FALSE, warning=FALSE}
+mydfLD_tipdb0<-ggpredict(modtipdb.DD0xboth, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+
+mydfLD_tipdb05low<-ggpredict(modtipdb.DD05xlow, terms =c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_tipdb05high<-ggpredict(modtipdb.DD05xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_tipdb1low<-ggpredict(modtipdb.DD1xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_tipdb1high<-ggpredict(modtipdb.DD1xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_tipdb2low<-ggpredict(modtipdb.DD2xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_tipdb2high<-ggpredict(modtipdb.DD2xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_tipdb3low<-ggpredict(modtipdb.DD3xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_tipdb3high<-ggpredict(modtipdb.DD3xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+```
+
+### Prediction plots
+```{r,echo=FALSE}
+palMSPnew <- c("#A36B2BFF","#94B9A7FF","#2686A0FF")
+palTDnew <- c("#2686A0FF", "#94B9A7FF", "#C6AA74FF", "#A36B2BFF")
+
+
+(ptipdb0<-ggplot(mydfLD_tipdb0, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of tip dieback", title="0x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptipdb05low<-ggplot(mydfLD_tipdb05low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of tip dieback", title="0.5x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptipdb1low<-ggplot(mydfLD_tipdb1low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of tip dieback", title="1x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptipdb2low<-ggplot(mydfLD_tipdb2low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of tip dieback", title="2x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptipdb3low<-ggplot(mydfLD_tipdb3low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",
+         y ="Probability of tip dieback", title="3x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptipdb05high<-ggplot(mydfLD_tipdb05high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="0.5x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+(ptipdb1high<-ggplot(mydfLD_tipdb1high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="1x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+(ptipdb2high<-ggplot(mydfLD_tipdb2high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="2x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+
+(ptipdb3high<-ggplot(mydfLD_tipdb3high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",
+         y =NULL, title="3x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Multipanel
+```{r,echo=FALSE}
+Figtipdbsensmult <- (ptipdb0|plot_spacer())/(ptipdb05low|ptipdb05high)/(ptipdb1low|ptipdb1high)/(ptipdb2low|ptipdb2high)/(ptipdb3low|ptipdb3high)
+Figtipdbsensmultann <- Figtipdbsensmult + plot_annotation(tag_levels = c("a"))
+
+ggsave(Figtipdbsensmultann, file="SSMT_FH_tipdieback_pred_Sensitivity.png", dpi=600, height=10.5, width=7)
+```
+
+### Multipanel
+```{r,echo=FALSE}
+Figtipbranchtopdbsensmult <- (ptipdb0|pbrdb0|ptopdb0)/(ptipdb05low|pbrdb05low|ptopdb05low)/(ptipdb1low|pbrdb1low|ptopdb1low)/(ptipdb2low|pbrdb2low|ptopdb2low)/(ptipdb3low|pbrdb3low|ptopdb3low)
+
+ggsave(Figtipbranchtopdbsensmult, file="SSMT_FH_tipbranchtopdieback_pred_Sensitivity.png", dpi=600, height=10.5, width=9)
+```
+

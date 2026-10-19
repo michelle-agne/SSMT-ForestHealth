@@ -1,0 +1,1170 @@
+---
+title: "Sensitivity Transfer Dist by Indicator"
+author: "Michelle C. Agne"
+date: "2026-10-02"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(corrplot)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(AICcmodavg)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(glmmTMB)
+```
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) %>%
+  mutate(LD = as.factor(if_else(TS == 1, "L",
+                      if_else(TS == 2, "L",
+                              if_else(TS == 3, "L","D")))))
+field_climate_08_23_inc$Unique_ID <- seq_len(nrow(field_climate_08_23_inc))
+
+field_climate_08_23_inc$MCMT_dist_std <- (field_climate_08_23_inc$MCMT_dist - mean(field_climate_08_23_inc$MCMT_dist))/(2*sd(field_climate_08_23_inc$MCMT_dist))
+field_climate_08_23_inc$MWMT_dist_std <- (field_climate_08_23_inc$MWMT_dist - mean(field_climate_08_23_inc$MWMT_dist))/(2*sd(field_climate_08_23_inc$MWMT_dist))
+field_climate_08_23_inc$MSP_dist_std <- (field_climate_08_23_inc$MSP_dist - mean(field_climate_08_23_inc$MSP_dist))/(2*sd(field_climate_08_23_inc$MSP_dist))
+field_climate_08_23_inc$TD_dist_std <- (field_climate_08_23_inc$TD_dist - mean(field_climate_08_23_inc$TD_dist))/(2*sd(field_climate_08_23_inc$TD_dist))
+field_climate_08_23_inc$SHM_dist_std <- (field_climate_08_23_inc$SHM_dist - mean(field_climate_08_23_inc$SHM_dist))/(2*sd(field_climate_08_23_inc$SHM_dist))
+field_climate_08_23_inc$MAT_dist_std <- (field_climate_08_23_inc$MAT_dist - mean(field_climate_08_23_inc$MAT_dist))/(2*sd(field_climate_08_23_inc$MAT_dist))
+
+live_trees <- field_climate_08_23_inc %>% filter(TS==1|TS==2|TS==3) #7881 live trees assessed
+
+dead_trees <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+# 302 dead trees assessed for sunken bole, pitching on bole, galls
+```
+
+# Chlorosis
+Percentiles of interest
+0 - 0
+0.5x - 83
+1x - 165
+2x - 331
+3x - 496
+
+## Sim 1
+```{r,echo=FALSE}
+set.seed(25)
+#0x - 0 trees
+chlorrand_0 <- dead_trees[sample(nrow(dead_trees), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlorrand_05 <- dead_trees[sample(nrow(dead_trees), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlorrand_1 <- dead_trees[sample(nrow(dead_trees), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlorrand_2 <- dead_trees[sample(nrow(dead_trees), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlorrand_3 <- dead_trees[sample(nrow(dead_trees), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sensDD_join <- left_join(dead_trees,chlorrand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlorrand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlorrand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlorrand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlorrand_3, by=c("Unique_ID","LD")) 
+
+chlor_sensDD_repl <- chlor_sensDD_join %>%
+  mutate(chlorrand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlorrand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlorrand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlorrand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlorrand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_wDD_sims <- left_join(field_climate_08_23_inc,chlor_sensDD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlorrand_0:chlorrand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_wDD_sims$TD_dist_std <- (tmp_chlor_wDD_sims$TD_dist - mean(tmp_chlor_wDD_sims$TD_dist))/(2*sd(tmp_chlor_wDD_sims$TD_dist))
+tmp_chlor_wDD_sims$MCMT_dist_std <- (tmp_chlor_wDD_sims$MCMT_dist - mean(tmp_chlor_wDD_sims$MCMT_dist))/(2*sd(tmp_chlor_wDD_sims$MCMT_dist))
+tmp_chlor_wDD_sims$MSP_dist_std <- (tmp_chlor_wDD_sims$MSP_dist - mean(tmp_chlor_wDD_sims$MSP_dist))/(2*sd(tmp_chlor_wDD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor.OG <- glmmTMB(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23_inc, family = binomial(link = "logit"))
+
+modChlor1.DD0x <- glmmTMB(chlorrand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+modChlor.DD0xboth <- glmmTMB(chlorrand_0 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+
+modChlor1.DD05x <- glmmTMB(chlorrand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+modChlor1.DD1x <- glmmTMB(chlorrand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+modChlor.DD1xhigh <- glmmTMB(chlorrand_1 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+modChlor1.DD2x <- glmmTMB(chlorrand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+modChlor1.DD3x <- glmmTMB(chlorrand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+
+modChlor.DD3xlow <- glmmTMB(chlorrand_3 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+modChlorOG_df<-tidy(modChlor.OG, conf.int = TRUE, effects = "fixed")
+modChlorOG_df$model <- "OG"
+modChlorOG_df$multiplier <- "Original model"
+
+sim1Chlor0x_df<-tidy(modChlor1.DD0x, conf.int = TRUE, effects = "fixed")
+sim1Chlor0x_df$model <- "Sim 1"
+sim1Chlor0x_df$multiplier <- "0"
+
+sim1Chlor05x_df<-tidy(modChlor1.DD05x, conf.int = TRUE, effects = "fixed")
+sim1Chlor05x_df$model <- "Sim 1"
+sim1Chlor05x_df$multiplier <- "0.5x"
+
+sim1Chlor1x_df<-tidy(modChlor1.DD1x, conf.int = TRUE, effects = "fixed")
+sim1Chlor1x_df$model <- "Sim 1"
+sim1Chlor1x_df$multiplier <- "1x"
+
+sim1Chlor2x_df<-tidy(modChlor1.DD2x, conf.int = TRUE, effects = "fixed")
+sim1Chlor2x_df$model <- "Sim 1"
+sim1Chlor2x_df$multiplier <- "2x"
+
+sim1Chlor3x_df<-tidy(modChlor1.DD3x, conf.int = TRUE, effects = "fixed")
+sim1Chlor3x_df$model <- "Sim 1"
+sim1Chlor3x_df$multiplier <- "3x"
+```
+
+## Sim 2
+```{r,echo=FALSE}
+dead_trees2 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+
+set.seed(51)
+#0x - 0 trees
+chlor2rand_0 <- dead_trees2[sample(nrow(dead_trees2), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor2rand_05 <- dead_trees2[sample(nrow(dead_trees2), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor2rand_1 <- dead_trees2[sample(nrow(dead_trees2), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor2rand_2 <- dead_trees2[sample(nrow(dead_trees2), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor2rand_3 <- dead_trees2[sample(nrow(dead_trees2), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens2DD_join <- left_join(dead_trees2,chlor2rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor2rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor2rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor2rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor2rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens2DD_repl <- chlor_sens2DD_join %>%
+  mutate(chlor2rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor2rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor2rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor2rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor2rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+tmp_chlor_w2DD_sims <- left_join(field_climate_08_23_inc,chlor_sens2DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor2rand_0:chlor2rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w2DD_sims$TD_dist_std <- (tmp_chlor_w2DD_sims$TD_dist - mean(tmp_chlor_w2DD_sims$TD_dist))/(2*sd(tmp_chlor_w2DD_sims$TD_dist))
+tmp_chlor_w2DD_sims$MCMT_dist_std <- (tmp_chlor_w2DD_sims$MCMT_dist - mean(tmp_chlor_w2DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w2DD_sims$MCMT_dist))
+tmp_chlor_w2DD_sims$MSP_dist_std <- (tmp_chlor_w2DD_sims$MSP_dist - mean(tmp_chlor_w2DD_sims$MSP_dist))/(2*sd(tmp_chlor_w2DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor2.DD0x <- glmmTMB(chlor2rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w2DD_sims, family = binomial(link = "logit"))
+
+modChlor2.DD05x <- glmmTMB(chlor2rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w2DD_sims, family = binomial(link = "logit"))
+
+modChlor2.DD1x <- glmmTMB(chlor2rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w2DD_sims, family = binomial(link = "logit"))
+
+modChlor2.DD2x <- glmmTMB(chlor2rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w2DD_sims, family = binomial(link = "logit"))
+
+modChlor2.DD3x <- glmmTMB(chlor2rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w2DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim2Chlor0x_df<-tidy(modChlor2.DD0x, conf.int = TRUE, effects = "fixed")
+sim2Chlor0x_df$model <- "Sim 2"
+sim2Chlor0x_df$multiplier <- "0"
+
+sim2Chlor05x_df<-tidy(modChlor2.DD05x, conf.int = TRUE, effects = "fixed")
+sim2Chlor05x_df$model <- "Sim 2"
+sim2Chlor05x_df$multiplier <- "0.5x"
+
+sim2Chlor1x_df<-tidy(modChlor2.DD1x, conf.int = TRUE, effects = "fixed")
+sim2Chlor1x_df$model <- "Sim 2"
+sim2Chlor1x_df$multiplier <- "1x"
+
+sim2Chlor2x_df<-tidy(modChlor2.DD2x, conf.int = TRUE, effects = "fixed")
+sim2Chlor2x_df$model <- "Sim 2"
+sim2Chlor2x_df$multiplier <- "2x"
+
+sim2Chlor3x_df<-tidy(modChlor2.DD3x, conf.int = TRUE, effects = "fixed")
+sim2Chlor3x_df$model <- "Sim 2"
+sim2Chlor3x_df$multiplier <- "3x"
+```
+
+## Sim 3
+```{r,echo=FALSE}
+dead_trees3 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(75)
+#0x - 0 trees
+chlor3rand_0 <- dead_trees3[sample(nrow(dead_trees3), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor3rand_05 <- dead_trees3[sample(nrow(dead_trees3), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor3rand_1 <- dead_trees3[sample(nrow(dead_trees3), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor3rand_2 <- dead_trees3[sample(nrow(dead_trees3), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor3rand_3 <- dead_trees3[sample(nrow(dead_trees3), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens3DD_join <- left_join(dead_trees3,chlor3rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor3rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor3rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor3rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor3rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens3DD_repl <- chlor_sens3DD_join %>%
+  mutate(chlor3rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor3rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor3rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor3rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor3rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w3DD_sims <- left_join(field_climate_08_23_inc,chlor_sens3DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor3rand_0:chlor3rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w3DD_sims$TD_dist_std <- (tmp_chlor_w3DD_sims$TD_dist - mean(tmp_chlor_w3DD_sims$TD_dist))/(2*sd(tmp_chlor_w3DD_sims$TD_dist))
+tmp_chlor_w3DD_sims$MCMT_dist_std <- (tmp_chlor_w3DD_sims$MCMT_dist - mean(tmp_chlor_w3DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w3DD_sims$MCMT_dist))
+tmp_chlor_w3DD_sims$MSP_dist_std <- (tmp_chlor_w3DD_sims$MSP_dist - mean(tmp_chlor_w3DD_sims$MSP_dist))/(2*sd(tmp_chlor_w3DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor3.DD0x <- glmmTMB(chlor3rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w3DD_sims, family = binomial(link = "logit"))
+
+modChlor3.DD05x <- glmmTMB(chlor3rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w3DD_sims, family = binomial(link = "logit"))
+
+modChlor3.DD1x <- glmmTMB(chlor3rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w3DD_sims, family = binomial(link = "logit"))
+
+modChlor3.DD2x <- glmmTMB(chlor3rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w3DD_sims, family = binomial(link = "logit"))
+
+modChlor3.DD3x <- glmmTMB(chlor3rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w3DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim3Chlor0x_df<-tidy(modChlor3.DD0x, conf.int = TRUE, effects = "fixed")
+sim3Chlor0x_df$model <- "Sim 3"
+sim3Chlor0x_df$multiplier <- "0"
+
+sim3Chlor05x_df<-tidy(modChlor3.DD05x, conf.int = TRUE, effects = "fixed")
+sim3Chlor05x_df$model <- "Sim 3"
+sim3Chlor05x_df$multiplier <- "0.5x"
+
+sim3Chlor1x_df<-tidy(modChlor3.DD1x, conf.int = TRUE, effects = "fixed")
+sim3Chlor1x_df$model <- "Sim 3"
+sim3Chlor1x_df$multiplier <- "1x"
+
+sim3Chlor2x_df<-tidy(modChlor3.DD2x, conf.int = TRUE, effects = "fixed")
+sim3Chlor2x_df$model <- "Sim 3"
+sim3Chlor2x_df$multiplier <- "2x"
+
+sim3Chlor3x_df<-tidy(modChlor3.DD3x, conf.int = TRUE, effects = "fixed")
+sim3Chlor3x_df$model <- "Sim 3"
+sim3Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 4
+```{r,echo=FALSE}
+dead_trees4 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(41)
+#0x - 0 trees
+chlor4rand_0 <- dead_trees4[sample(nrow(dead_trees4), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor4rand_05 <- dead_trees4[sample(nrow(dead_trees4), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor4rand_1 <- dead_trees4[sample(nrow(dead_trees4), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor4rand_2 <- dead_trees4[sample(nrow(dead_trees4), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor4rand_3 <- dead_trees4[sample(nrow(dead_trees4), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens4DD_join <- left_join(dead_trees4,chlor4rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor4rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor4rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor4rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor4rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens4DD_repl <- chlor_sens4DD_join %>%
+  mutate(chlor4rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor4rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor4rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor4rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor4rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w4DD_sims <- left_join(field_climate_08_23_inc,chlor_sens4DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor4rand_0:chlor4rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w4DD_sims$TD_dist_std <- (tmp_chlor_w4DD_sims$TD_dist - mean(tmp_chlor_w4DD_sims$TD_dist))/(2*sd(tmp_chlor_w4DD_sims$TD_dist))
+tmp_chlor_w4DD_sims$MCMT_dist_std <- (tmp_chlor_w4DD_sims$MCMT_dist - mean(tmp_chlor_w4DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w4DD_sims$MCMT_dist))
+tmp_chlor_w4DD_sims$MSP_dist_std <- (tmp_chlor_w4DD_sims$MSP_dist - mean(tmp_chlor_w4DD_sims$MSP_dist))/(2*sd(tmp_chlor_w4DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor4.DD0x <- glmmTMB(chlor4rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w4DD_sims, family = binomial(link = "logit"))
+
+modChlor4.DD05x <- glmmTMB(chlor4rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w4DD_sims, family = binomial(link = "logit"))
+
+modChlor4.DD1x <- glmmTMB(chlor4rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w4DD_sims, family = binomial(link = "logit"))
+
+modChlor4.DD2x <- glmmTMB(chlor4rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w4DD_sims, family = binomial(link = "logit"))
+
+modChlor.DD2xhigh <- glmmTMB(chlor4rand_2 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w4DD_sims, family = binomial(link = "logit"))
+
+modChlor4.DD3x <- glmmTMB(chlor4rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w4DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+
+sim4Chlor0x_df<-tidy(modChlor4.DD0x, conf.int = TRUE, effects = "fixed")
+sim4Chlor0x_df$model <- "Sim 4"
+sim4Chlor0x_df$multiplier <- "0"
+
+sim4Chlor05x_df<-tidy(modChlor4.DD05x, conf.int = TRUE, effects = "fixed")
+sim4Chlor05x_df$model <- "Sim 4"
+sim4Chlor05x_df$multiplier <- "0.5x"
+
+sim4Chlor1x_df<-tidy(modChlor4.DD1x, conf.int = TRUE, effects = "fixed")
+sim4Chlor1x_df$model <- "Sim 4"
+sim4Chlor1x_df$multiplier <- "1x"
+
+sim4Chlor2x_df<-tidy(modChlor4.DD2x, conf.int = TRUE, effects = "fixed")
+sim4Chlor2x_df$model <- "Sim 4"
+sim4Chlor2x_df$multiplier <- "2x"
+
+sim4Chlor3x_df<-tidy(modChlor4.DD3x, conf.int = TRUE, effects = "fixed")
+sim4Chlor3x_df$model <- "Sim 4"
+sim4Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 5
+```{r,echo=FALSE}
+dead_trees5 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(101)
+#0x - 0 trees
+chlor5rand_0 <- dead_trees5[sample(nrow(dead_trees5), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor5rand_05 <- dead_trees5[sample(nrow(dead_trees5), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor5rand_1 <- dead_trees5[sample(nrow(dead_trees5), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor5rand_2 <- dead_trees5[sample(nrow(dead_trees5), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor5rand_3 <- dead_trees5[sample(nrow(dead_trees5), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens5DD_join <- left_join(dead_trees5,chlor5rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor5rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor5rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor5rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor5rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens5DD_repl <- chlor_sens5DD_join %>%
+  mutate(chlor5rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor5rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor5rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor5rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor5rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w5DD_sims <- left_join(field_climate_08_23_inc,chlor_sens5DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor5rand_0:chlor5rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w5DD_sims$TD_dist_std <- (tmp_chlor_w5DD_sims$TD_dist - mean(tmp_chlor_w5DD_sims$TD_dist))/(2*sd(tmp_chlor_w5DD_sims$TD_dist))
+tmp_chlor_w5DD_sims$MCMT_dist_std <- (tmp_chlor_w5DD_sims$MCMT_dist - mean(tmp_chlor_w5DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w5DD_sims$MCMT_dist))
+tmp_chlor_w5DD_sims$MSP_dist_std <- (tmp_chlor_w5DD_sims$MSP_dist - mean(tmp_chlor_w5DD_sims$MSP_dist))/(2*sd(tmp_chlor_w5DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor5.DD0x <- glmmTMB(chlor5rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+
+modChlor5.DD05x <- glmmTMB(chlor5rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+
+modChlor.DD05xlow <- glmmTMB(chlor5rand_05 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+
+modChlor5.DD1x <- glmmTMB(chlor5rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+
+modChlor5.DD2x <- glmmTMB(chlor5rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+
+modChlor.DD2xlow <- glmmTMB(chlor5rand_2 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist+ I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+
+
+modChlor5.DD3x <- glmmTMB(chlor5rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w5DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim5Chlor0x_df<-tidy(modChlor5.DD0x, conf.int = TRUE, effects = "fixed")
+sim5Chlor0x_df$model <- "Sim 5"
+sim5Chlor0x_df$multiplier <- "0"
+
+sim5Chlor05x_df<-tidy(modChlor5.DD05x, conf.int = TRUE, effects = "fixed")
+sim5Chlor05x_df$model <- "Sim 5"
+sim5Chlor05x_df$multiplier <- "0.5x"
+
+sim5Chlor1x_df<-tidy(modChlor5.DD1x, conf.int = TRUE, effects = "fixed")
+sim5Chlor1x_df$model <- "Sim 5"
+sim5Chlor1x_df$multiplier <- "1x"
+
+sim5Chlor2x_df<-tidy(modChlor5.DD2x, conf.int = TRUE, effects = "fixed")
+sim5Chlor2x_df$model <- "Sim 5"
+sim5Chlor2x_df$multiplier <- "2x"
+
+sim5Chlor3x_df<-tidy(modChlor5.DD3x, conf.int = TRUE, effects = "fixed")
+sim5Chlor3x_df$model <- "Sim 5"
+sim5Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 6
+```{r,echo=FALSE}
+dead_trees6 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(80)
+#0x - 0 trees
+chlor6rand_0 <- dead_trees6[sample(nrow(dead_trees6), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor6rand_05 <- dead_trees6[sample(nrow(dead_trees6), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor6rand_1 <- dead_trees6[sample(nrow(dead_trees6), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor6rand_2 <- dead_trees6[sample(nrow(dead_trees6), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor6rand_3 <- dead_trees6[sample(nrow(dead_trees6), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens6DD_join <- left_join(dead_trees6,chlor6rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor6rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor6rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor6rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor6rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens6DD_repl <- chlor_sens6DD_join %>%
+  mutate(chlor6rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor6rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor6rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor6rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor6rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w6DD_sims <- left_join(field_climate_08_23_inc,chlor_sens6DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor6rand_0:chlor6rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w6DD_sims$TD_dist_std <- (tmp_chlor_w6DD_sims$TD_dist - mean(tmp_chlor_w6DD_sims$TD_dist))/(2*sd(tmp_chlor_w6DD_sims$TD_dist))
+tmp_chlor_w6DD_sims$MCMT_dist_std <- (tmp_chlor_w6DD_sims$MCMT_dist - mean(tmp_chlor_w6DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w6DD_sims$MCMT_dist))
+tmp_chlor_w6DD_sims$MSP_dist_std <- (tmp_chlor_w6DD_sims$MSP_dist - mean(tmp_chlor_w6DD_sims$MSP_dist))/(2*sd(tmp_chlor_w6DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor6.DD0x <- glmmTMB(chlor6rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w6DD_sims, family = binomial(link = "logit"))
+
+modChlor6.DD05x <- glmmTMB(chlor6rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w6DD_sims, family = binomial(link = "logit"))
+
+modChlor6.DD1x <- glmmTMB(chlor6rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w6DD_sims, family = binomial(link = "logit"))
+
+modChlor6.DD2x <- glmmTMB(chlor6rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w6DD_sims, family = binomial(link = "logit"))
+
+modChlor6.DD3x <- glmmTMB(chlor6rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w6DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim6Chlor0x_df<-tidy(modChlor6.DD0x, conf.int = TRUE, effects = "fixed")
+sim6Chlor0x_df$model <- "Sim 6"
+sim6Chlor0x_df$multiplier <- "0"
+
+sim6Chlor05x_df<-tidy(modChlor6.DD05x, conf.int = TRUE, effects = "fixed")
+sim6Chlor05x_df$model <- "Sim 6"
+sim6Chlor05x_df$multiplier <- "0.5x"
+
+sim6Chlor1x_df<-tidy(modChlor6.DD1x, conf.int = TRUE, effects = "fixed")
+sim6Chlor1x_df$model <- "Sim 6"
+sim6Chlor1x_df$multiplier <- "1x"
+
+sim6Chlor2x_df<-tidy(modChlor6.DD2x, conf.int = TRUE, effects = "fixed")
+sim6Chlor2x_df$model <- "Sim 6"
+sim6Chlor2x_df$multiplier <- "2x"
+
+sim6Chlor3x_df<-tidy(modChlor6.DD3x, conf.int = TRUE, effects = "fixed")
+sim6Chlor3x_df$model <- "Sim 6"
+sim6Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 7
+```{r,echo=FALSE}
+dead_trees7 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(125)
+#0x - 0 trees
+chlor7rand_0 <- dead_trees7[sample(nrow(dead_trees7), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor7rand_05 <- dead_trees7[sample(nrow(dead_trees7), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor7rand_1 <- dead_trees7[sample(nrow(dead_trees7), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor7rand_2 <- dead_trees7[sample(nrow(dead_trees7), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor7rand_3 <- dead_trees7[sample(nrow(dead_trees7), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens7DD_join <- left_join(dead_trees7,chlor7rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor7rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor7rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor7rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor7rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens7DD_repl <- chlor_sens7DD_join %>%
+  mutate(chlor7rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor7rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor7rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor7rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor7rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w7DD_sims <- left_join(field_climate_08_23_inc,chlor_sens7DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor7rand_0:chlor7rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w7DD_sims$TD_dist_std <- (tmp_chlor_w7DD_sims$TD_dist - mean(tmp_chlor_w7DD_sims$TD_dist))/(2*sd(tmp_chlor_w7DD_sims$TD_dist))
+tmp_chlor_w7DD_sims$MCMT_dist_std <- (tmp_chlor_w7DD_sims$MCMT_dist - mean(tmp_chlor_w7DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w7DD_sims$MCMT_dist))
+tmp_chlor_w7DD_sims$MSP_dist_std <- (tmp_chlor_w7DD_sims$MSP_dist - mean(tmp_chlor_w7DD_sims$MSP_dist))/(2*sd(tmp_chlor_w7DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor7.DD0x <- glmmTMB(chlor7rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w7DD_sims, family = binomial(link = "logit"))
+
+modChlor7.DD05x <- glmmTMB(chlor7rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w7DD_sims, family = binomial(link = "logit"))
+
+modChlor7.DD1x <- glmmTMB(chlor7rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w7DD_sims, family = binomial(link = "logit"))
+
+modChlor7.DD2x <- glmmTMB(chlor7rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w7DD_sims, family = binomial(link = "logit"))
+
+modChlor7.DD3x <- glmmTMB(chlor7rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w7DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim7Chlor0x_df<-tidy(modChlor7.DD0x, conf.int = TRUE, effects = "fixed")
+sim7Chlor0x_df$model <- "Sim 7"
+sim7Chlor0x_df$multiplier <- "0"
+
+sim7Chlor05x_df<-tidy(modChlor7.DD05x, conf.int = TRUE, effects = "fixed")
+sim7Chlor05x_df$model <- "Sim 7"
+sim7Chlor05x_df$multiplier <- "0.5x"
+
+sim7Chlor1x_df<-tidy(modChlor7.DD1x, conf.int = TRUE, effects = "fixed")
+sim7Chlor1x_df$model <- "Sim 7"
+sim7Chlor1x_df$multiplier <- "1x"
+
+sim7Chlor2x_df<-tidy(modChlor7.DD2x, conf.int = TRUE, effects = "fixed")
+sim7Chlor2x_df$model <- "Sim 7"
+sim7Chlor2x_df$multiplier <- "2x"
+
+sim7Chlor3x_df<-tidy(modChlor7.DD3x, conf.int = TRUE, effects = "fixed")
+sim7Chlor3x_df$model <- "Sim 7"
+sim7Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 8
+```{r,echo=FALSE}
+dead_trees8 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(106)
+#0x - 0 trees
+chlor8rand_0 <- dead_trees8[sample(nrow(dead_trees8), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor8rand_05 <- dead_trees8[sample(nrow(dead_trees8), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor8rand_1 <- dead_trees8[sample(nrow(dead_trees8), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor8rand_2 <- dead_trees8[sample(nrow(dead_trees8), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor8rand_3 <- dead_trees8[sample(nrow(dead_trees8), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens8DD_join <- left_join(dead_trees8,chlor8rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor8rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor8rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor8rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor8rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens8DD_repl <- chlor_sens8DD_join %>%
+  mutate(chlor8rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor8rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor8rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor8rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor8rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w8DD_sims <- left_join(field_climate_08_23_inc,chlor_sens8DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor8rand_0:chlor8rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w8DD_sims$TD_dist_std <- (tmp_chlor_w8DD_sims$TD_dist - mean(tmp_chlor_w8DD_sims$TD_dist))/(2*sd(tmp_chlor_w8DD_sims$TD_dist))
+tmp_chlor_w8DD_sims$MCMT_dist_std <- (tmp_chlor_w8DD_sims$MCMT_dist - mean(tmp_chlor_w8DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w8DD_sims$MCMT_dist))
+tmp_chlor_w8DD_sims$MSP_dist_std <- (tmp_chlor_w8DD_sims$MSP_dist - mean(tmp_chlor_w8DD_sims$MSP_dist))/(2*sd(tmp_chlor_w8DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor8.DD0x <- glmmTMB(chlor8rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w8DD_sims, family = binomial(link = "logit"))
+
+modChlor8.DD05x <- glmmTMB(chlor8rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w8DD_sims, family = binomial(link = "logit"))
+
+modChlor8.DD1x <- glmmTMB(chlor8rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w8DD_sims, family = binomial(link = "logit"))
+
+modChlor.DD1xlow <- glmmTMB(chlor8rand_1 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w8DD_sims, family = binomial(link = "logit"))
+
+modChlor8.DD2x <- glmmTMB(chlor8rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w8DD_sims, family = binomial(link = "logit"))
+
+modChlor8.DD3x <- glmmTMB(chlor8rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w8DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim8Chlor0x_df<-tidy(modChlor8.DD0x, conf.int = TRUE, effects = "fixed")
+sim8Chlor0x_df$model <- "Sim 8"
+sim8Chlor0x_df$multiplier <- "0"
+
+sim8Chlor05x_df<-tidy(modChlor8.DD05x, conf.int = TRUE, effects = "fixed")
+sim8Chlor05x_df$model <- "Sim 8"
+sim8Chlor05x_df$multiplier <- "0.5x"
+
+sim8Chlor1x_df<-tidy(modChlor8.DD1x, conf.int = TRUE, effects = "fixed")
+sim8Chlor1x_df$model <- "Sim 8"
+sim8Chlor1x_df$multiplier <- "1x"
+
+sim8Chlor2x_df<-tidy(modChlor8.DD2x, conf.int = TRUE, effects = "fixed")
+sim8Chlor2x_df$model <- "Sim 8"
+sim8Chlor2x_df$multiplier <- "2x"
+
+sim8Chlor3x_df<-tidy(modChlor8.DD3x, conf.int = TRUE, effects = "fixed")
+sim8Chlor3x_df$model <- "Sim 8"
+sim8Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 9
+```{r,echo=FALSE}
+dead_trees9 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(38)
+#0x - 0 trees
+chlor9rand_0 <- dead_trees9[sample(nrow(dead_trees9), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor9rand_05 <- dead_trees9[sample(nrow(dead_trees9), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor9rand_1 <- dead_trees9[sample(nrow(dead_trees9), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor9rand_2 <- dead_trees9[sample(nrow(dead_trees9), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor9rand_3 <- dead_trees9[sample(nrow(dead_trees9), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens9DD_join <- left_join(dead_trees9,chlor9rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor9rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor9rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor9rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor9rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens9DD_repl <- chlor_sens9DD_join %>%
+  mutate(chlor9rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor9rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor9rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor9rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor9rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w9DD_sims <- left_join(field_climate_08_23_inc,chlor_sens9DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor9rand_0:chlor9rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w9DD_sims$TD_dist_std <- (tmp_chlor_w9DD_sims$TD_dist - mean(tmp_chlor_w9DD_sims$TD_dist))/(2*sd(tmp_chlor_w9DD_sims$TD_dist))
+tmp_chlor_w9DD_sims$MCMT_dist_std <- (tmp_chlor_w9DD_sims$MCMT_dist - mean(tmp_chlor_w9DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w9DD_sims$MCMT_dist))
+tmp_chlor_w9DD_sims$MSP_dist_std <- (tmp_chlor_w9DD_sims$MSP_dist - mean(tmp_chlor_w9DD_sims$MSP_dist))/(2*sd(tmp_chlor_w9DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor9.DD0x <- glmmTMB(chlor9rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w9DD_sims, family = binomial(link = "logit"))
+
+modChlor9.DD05x <- glmmTMB(chlor9rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w9DD_sims, family = binomial(link = "logit"))
+
+modChlor9.DD1x <- glmmTMB(chlor9rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w9DD_sims, family = binomial(link = "logit"))
+
+modChlor9.DD2x <- glmmTMB(chlor9rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w9DD_sims, family = binomial(link = "logit"))
+
+modChlor9.DD3x <- glmmTMB(chlor9rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w9DD_sims, family = binomial(link = "logit"))
+
+modChlor.DD3xhigh <- glmmTMB(chlor9rand_3 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w9DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim9Chlor0x_df<-tidy(modChlor9.DD0x, conf.int = TRUE, effects = "fixed")
+sim9Chlor0x_df$model <- "Sim 9"
+sim9Chlor0x_df$multiplier <- "0"
+
+sim9Chlor05x_df<-tidy(modChlor9.DD05x, conf.int = TRUE, effects = "fixed")
+sim9Chlor05x_df$model <- "Sim 9"
+sim9Chlor05x_df$multiplier <- "0.5x"
+
+sim9Chlor1x_df<-tidy(modChlor9.DD1x, conf.int = TRUE, effects = "fixed")
+sim9Chlor1x_df$model <- "Sim 9"
+sim9Chlor1x_df$multiplier <- "1x"
+
+sim9Chlor2x_df<-tidy(modChlor9.DD2x, conf.int = TRUE, effects = "fixed")
+sim9Chlor2x_df$model <- "Sim 9"
+sim9Chlor2x_df$multiplier <- "2x"
+
+sim9Chlor3x_df<-tidy(modChlor9.DD3x, conf.int = TRUE, effects = "fixed")
+sim9Chlor3x_df$model <- "Sim 9"
+sim9Chlor3x_df$multiplier <- "3x"
+```
+
+
+## Sim 10
+```{r,echo=FALSE}
+dead_trees10 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(145)
+#0x - 0 trees
+chlor10rand_0 <- dead_trees10[sample(nrow(dead_trees10), size=0), ] %>% mutate(Chlor_0 = 1)
+
+#0.5x - 83 trees
+chlor10rand_05 <- dead_trees10[sample(nrow(dead_trees10), size=83), ] %>% mutate(Chor_05 = 1)
+
+#1x - 165 trees
+chlor10rand_1 <- dead_trees10[sample(nrow(dead_trees10), size=165), ] %>% mutate(Chlor_1 = 1)
+
+#2x - 331 trees
+chlor10rand_2 <- dead_trees10[sample(nrow(dead_trees10), size=331), ] %>% mutate(Chlor_2 = 1)
+
+#3x - 496 trees
+chlor10rand_3 <- dead_trees10[sample(nrow(dead_trees10), size=496), ] %>% mutate(Chlor_3 = 1)
+
+
+chlor_sens10DD_join <- left_join(dead_trees10,chlor10rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor10rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor10rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor10rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,chlor10rand_3, by=c("Unique_ID","LD")) 
+
+chlor_sens10DD_repl <- chlor_sens10DD_join %>%
+  mutate(chlor10rand_0 = if_else(is.na(Chlor_0),0, Chlor_0))%>%
+  mutate(chlor10rand_05 = if_else(is.na(Chor_05),0, Chor_05))%>%
+  mutate(chlor10rand_1 = if_else(is.na(Chlor_1),0, Chlor_1))%>%
+  mutate(chlor10rand_2 = if_else(is.na(Chlor_2),0, Chlor_2))%>%
+  mutate(chlor10rand_3 = if_else(is.na(Chlor_3),0, Chlor_3))
+
+
+tmp_chlor_w10DD_sims <- left_join(field_climate_08_23_inc,chlor_sens10DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(chlor10rand_0:chlor10rand_3), ~ ifelse(is.na(.), CC_yellow, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_chlor_w10DD_sims$TD_dist_std <- (tmp_chlor_w10DD_sims$TD_dist - mean(tmp_chlor_w10DD_sims$TD_dist))/(2*sd(tmp_chlor_w10DD_sims$TD_dist))
+tmp_chlor_w10DD_sims$MCMT_dist_std <- (tmp_chlor_w10DD_sims$MCMT_dist - mean(tmp_chlor_w10DD_sims$MCMT_dist))/(2*sd(tmp_chlor_w10DD_sims$MCMT_dist))
+tmp_chlor_w10DD_sims$MSP_dist_std <- (tmp_chlor_w10DD_sims$MSP_dist - mean(tmp_chlor_w10DD_sims$MSP_dist))/(2*sd(tmp_chlor_w10DD_sims$MSP_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modChlor10.DD0x <- glmmTMB(chlor10rand_0 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w10DD_sims, family = binomial(link = "logit"))
+
+modChlor10.DD05x <- glmmTMB(chlor10rand_05 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w10DD_sims, family = binomial(link = "logit"))
+
+modChlor.DD05xhigh <- glmmTMB(chlor10rand_05 ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w10DD_sims, family = binomial(link = "logit"))
+
+modChlor10.DD1x <- glmmTMB(chlor10rand_1 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w10DD_sims, family = binomial(link = "logit"))
+
+modChlor10.DD2x <- glmmTMB(chlor10rand_2 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w10DD_sims, family = binomial(link = "logit"))
+
+modChlor10.DD3x <- glmmTMB(chlor10rand_3 ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_chlor_w10DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim10Chlor0x_df<-tidy(modChlor10.DD0x, conf.int = TRUE, effects = "fixed")
+sim10Chlor0x_df$model <- "Sim 10"
+sim10Chlor0x_df$multiplier <- "0"
+
+sim10Chlor05x_df<-tidy(modChlor10.DD05x, conf.int = TRUE, effects = "fixed")
+sim10Chlor05x_df$model <- "Sim 10"
+sim10Chlor05x_df$multiplier <- "0.5x"
+
+sim10Chlor1x_df<-tidy(modChlor10.DD1x, conf.int = TRUE, effects = "fixed")
+sim10Chlor1x_df$model <- "Sim 10"
+sim10Chlor1x_df$multiplier <- "1x"
+
+sim10Chlor2x_df<-tidy(modChlor10.DD2x, conf.int = TRUE, effects = "fixed")
+sim10Chlor2x_df$model <- "Sim 10"
+sim10Chlor2x_df$multiplier <- "2x"
+
+sim10Chlor3x_df<-tidy(modChlor10.DD3x, conf.int = TRUE, effects = "fixed")
+sim10Chlor3x_df$model <- "Sim 10"
+sim10Chlor3x_df$multiplier <- "3x"
+```
+
+## All coefs
+```{r,echo=FALSE}
+Chlorcoefs_ALL <- bind_rows(modChlorOG_df,sim1Chlor0x_df,sim1Chlor05x_df,sim1Chlor1x_df,sim1Chlor2x_df,sim1Chlor3x_df,
+                      sim2Chlor05x_df,sim2Chlor1x_df,sim2Chlor2x_df,sim2Chlor3x_df,
+                       sim3Chlor05x_df,sim3Chlor1x_df,sim3Chlor2x_df,sim3Chlor3x_df,
+                       sim4Chlor05x_df,sim4Chlor1x_df,sim4Chlor2x_df,sim4Chlor3x_df,
+                       sim5Chlor05x_df,sim5Chlor1x_df,sim5Chlor2x_df,sim5Chlor3x_df,
+                      sim6Chlor05x_df,sim6Chlor1x_df,sim6Chlor2x_df,sim6Chlor3x_df,
+                     sim7Chlor05x_df,sim7Chlor1x_df,sim7Chlor2x_df,sim7Chlor3x_df,
+                   sim8Chlor05x_df,sim8Chlor1x_df,sim8Chlor2x_df,sim8Chlor3x_df,
+                       sim9Chlor05x_df,sim9Chlor1x_df,sim9Chlor2x_df,sim9Chlor3x_df,
+                       sim10Chlor05x_df,sim10Chlor1x_df,sim10Chlor2x_df,sim10Chlor3x_df) %>% rename(Simulation = model)
+
+Chlorcoefs_ALL$model <- seq_len(nrow(Chlorcoefs_ALL))
+write.csv(Chlorcoefs_ALL, "ChlorosisProb_sim_coefs.csv")
+```
+
+## Coefficient plots
+```{r,echo=FALSE}
+Chlorcoefs_ALL <- read.csv("ChlorosisProb_sim_coefs.csv")%>% mutate(term = fct_relevel(term, "(Intercept)", "I(TD_dist_std^2)","TD_dist_std","I(MSP_dist_std^2)","MSP_dist_std","I(MCMT_dist_std^2)","MCMT_dist_std")) %>%
+  mutate(multiplier = fct_relevel(multiplier, "0","0.5x","1x","2x","3x", "Original model")) 
+
+
+pal5_t <- turbo(5, alpha=1, begin=0.2, end=1)
+pal6 <- c("#3E9BFEFF", "#46F884FF", "#E1DD37FF", "#F05B12FF", "#7A0403FF","gray")
+
+(coefchlor<- Chlorcoefs_ALL %>% filter(term !="(Intercept)") %>% 
+              ggplot(aes(estimate, term, color=multiplier, xmin=conf.low,xmax = conf.high)) + 
+    theme_classic()+
+ 
+    geom_errorbar(position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+      geom_point(aes(color=multiplier),
+  fill="black",alpha=0.3,pch=21, position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+   scale_color_manual("Multiplier",values=pal6,labels = c('0x', '0.5x', '1x','2x','3x',"Original model"))+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y =NULL, title="Probability of chlorosis")+
+   scale_y_discrete(labels = c(expression(paste("TD"^"2")),"TD",expression(paste("MSP"^"2")),"MSP",expression(paste("MCMT"^"2")),"MCMT"))+
+  theme(
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11)))
+ggsave(coefchlor, file="SSMT_FH_Chlor_Sensitivity_coefs_title.png", dpi=600, height=6, width=6)
+```
+
+### Prediction data
+```{r, echo=FALSE, warning=FALSE}
+mydfLD_chlor0<-ggpredict(modChlor.DD0xboth, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+
+
+mydfLD_chlor05low<-ggpredict(modChlor.DD05xlow, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+mydfLD_chlor05high<-ggpredict(modChlor.DD05xhigh, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+
+mydfLD_chlor1low<-ggpredict(modChlor.DD1xlow, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+mydfLD_chlor1high<-ggpredict(modChlor.DD1xhigh, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+
+mydfLD_chlor2low<-ggpredict(modChlor.DD2xlow, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+mydfLD_chlor2high<-ggpredict(modChlor.DD2xhigh, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+
+mydfLD_chlor3low<-ggpredict(modChlor.DD3xlow, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+mydfLD_chlor3high<-ggpredict(modChlor.DD3xhigh, terms = c("TD_dist [all]", "MSP_dist [300, 0, -300]"))
+```
+
+### Prediction plots
+```{r,echo=FALSE}
+palMSPnew <- c("#A36B2BFF","#94B9A7FF","#2686A0FF")
+
+(pchlor0<-ggplot(mydfLD_chlor0, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew) +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew) +
+    guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of chlorosis", title="0x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor05low<-ggplot(mydfLD_chlor05low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of chlorosis", title="0.5x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor05high<-ggplot(mydfLD_chlor05high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="0.5x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor1low<-ggplot(mydfLD_chlor1low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of chlorosis", title="1x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor1high<-ggplot(mydfLD_chlor1high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="1x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor2low<-ggplot(mydfLD_chlor2low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of chlorosis", title="2x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor2high<-ggplot(mydfLD_chlor2high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="2x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor3low<-ggplot(mydfLD_chlor3low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of chlorosis", title="3x")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pchlor3high<-ggplot(mydfLD_chlor3high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y =NULL, title="3x - high")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Multipanel
+```{r,echo=FALSE}
+Figchlorsensmult <- (pchlor0|plot_spacer())/(pchlor05low|pchlor05high)/(pchlor1low|pchlor1high)/(pchlor2low|pchlor2high)/(pchlor3low|pchlor3high)
+Figchlorsensmultann <- Figchlorsensmult + plot_annotation(tag_levels = c("a"))
+
+ggsave(Figchlorsensmultann, file="SSMT_FH_Chlorosis_pred_Sensitivity.png", dpi=600, height=10.5, width=7)
+```
+
+
+
+
+
+
+
+

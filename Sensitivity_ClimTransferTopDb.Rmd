@@ -1,0 +1,1108 @@
+---
+title: "Sensitivity Climate Transfer Distance top dieback"
+author: "Michelle C. Agne"
+date: "2026-10-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(corrplot)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(AICcmodavg)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(glmmTMB)
+```
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) %>%
+  mutate(LD = as.factor(if_else(TS == 1, "L",
+                      if_else(TS == 2, "L",
+                              if_else(TS == 3, "L","D")))))
+field_climate_08_23_inc$Unique_ID <- seq_len(nrow(field_climate_08_23_inc))
+
+field_climate_08_23_inc$MCMT_dist_std <- (field_climate_08_23_inc$MCMT_dist - mean(field_climate_08_23_inc$MCMT_dist))/(2*sd(field_climate_08_23_inc$MCMT_dist))
+field_climate_08_23_inc$MWMT_dist_std <- (field_climate_08_23_inc$MWMT_dist - mean(field_climate_08_23_inc$MWMT_dist))/(2*sd(field_climate_08_23_inc$MWMT_dist))
+field_climate_08_23_inc$MSP_dist_std <- (field_climate_08_23_inc$MSP_dist - mean(field_climate_08_23_inc$MSP_dist))/(2*sd(field_climate_08_23_inc$MSP_dist))
+field_climate_08_23_inc$TD_dist_std <- (field_climate_08_23_inc$TD_dist - mean(field_climate_08_23_inc$TD_dist))/(2*sd(field_climate_08_23_inc$TD_dist))
+field_climate_08_23_inc$SHM_dist_std <- (field_climate_08_23_inc$SHM_dist - mean(field_climate_08_23_inc$SHM_dist))/(2*sd(field_climate_08_23_inc$SHM_dist))
+field_climate_08_23_inc$MAT_dist_std <- (field_climate_08_23_inc$MAT_dist - mean(field_climate_08_23_inc$MAT_dist))/(2*sd(field_climate_08_23_inc$MAT_dist))
+
+live_trees <- field_climate_08_23_inc %>% filter(TS==1|TS==2|TS==3) #7881 live trees assessed
+
+dead_trees <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+# 302 dead trees assessed for sunken bole, pitching on bole, galls
+```
+
+# Top dieback
+## Percentiles of interest
+0 - 0
+0.5x - 13
+1x - 25
+2x - 50
+3x - 75
+
+## Sim 1
+```{r,echo=FALSE}
+set.seed(25)
+#0x - 0 trees
+topdbrand_0 <- dead_trees[sample(nrow(dead_trees), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdbrand_05 <- dead_trees[sample(nrow(dead_trees), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdbrand_1 <- dead_trees[sample(nrow(dead_trees), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdbrand_2 <- dead_trees[sample(nrow(dead_trees), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdbrand_3 <- dead_trees[sample(nrow(dead_trees), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sensDD_join <- left_join(dead_trees,topdbrand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdbrand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdbrand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdbrand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdbrand_3, by=c("Unique_ID","LD")) 
+
+topdb_sensDD_repl <- topdb_sensDD_join %>%
+  mutate(topdbrand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdbrand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdbrand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdbrand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdbrand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_wDD_sims <- left_join(field_climate_08_23_inc,topdb_sensDD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdbrand_0:topdbrand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_wDD_sims$TD_dist_std <- (tmp_topdb_wDD_sims$TD_dist - mean(tmp_topdb_wDD_sims$TD_dist))/(2*sd(tmp_topdb_wDD_sims$TD_dist))
+tmp_topdb_wDD_sims$MWMT_dist_std <- (tmp_topdb_wDD_sims$MWMT_dist - mean(tmp_topdb_wDD_sims$MWMT_dist))/(2*sd(tmp_topdb_wDD_sims$MWMT_dist))
+tmp_topdb_wDD_sims$SHM_dist_std <- (tmp_topdb_wDD_sims$SHM_dist - mean(tmp_topdb_wDD_sims$SHM_dist))/(2*sd(tmp_topdb_wDD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb.OG <- glmmTMB(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23_inc, family = binomial(link = "logit"))
+
+modtopdb.DD0xboth<- glmmTMB(TopDB01 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23_inc, family = binomial(link = "logit"))
+
+modtopdb1.DD0x <- glmmTMB(topdbrand_0 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb1.DD05x <- glmmTMB(topdbrand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD05xlow <- glmmTMB(topdbrand_05 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb1.DD1x <- glmmTMB(topdbrand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD1xlow <- glmmTMB(topdbrand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb1.DD2x <- glmmTMB(topdbrand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb1.DD3x <- glmmTMB(topdbrand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD3xhigh <- glmmTMB(topdbrand_3 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist+ I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+modtopdbOG_df<-tidy(modtopdb.OG, conf.int = TRUE, effects = "fixed")
+modtopdbOG_df$model <- "OG"
+modtopdbOG_df$multoplier <- "Original model"
+
+sim1topdb0x_df<-tidy(modtopdb1.DD0x, conf.int = TRUE, effects = "fixed")
+sim1topdb0x_df$model <- "Sim 1"
+sim1topdb0x_df$multoplier <- "0"
+
+sim1topdb05x_df<-tidy(modtopdb1.DD05x, conf.int = TRUE, effects = "fixed")
+sim1topdb05x_df$model <- "Sim 1"
+sim1topdb05x_df$multoplier <- "0.5x"
+
+sim1topdb1x_df<-tidy(modtopdb1.DD1x, conf.int = TRUE, effects = "fixed")
+sim1topdb1x_df$model <- "Sim 1"
+sim1topdb1x_df$multoplier <- "1x"
+
+sim1topdb2x_df<-tidy(modtopdb1.DD2x, conf.int = TRUE, effects = "fixed")
+sim1topdb2x_df$model <- "Sim 1"
+sim1topdb2x_df$multoplier <- "2x"
+
+sim1topdb3x_df<-tidy(modtopdb1.DD3x, conf.int = TRUE, effects = "fixed")
+sim1topdb3x_df$model <- "Sim 1"
+sim1topdb3x_df$multoplier <- "3x"
+```
+
+## Sim 2
+```{r,echo=FALSE}
+dead_trees2 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+
+set.seed(51)
+#0x - 0 trees
+topdb2rand_0 <- dead_trees2[sample(nrow(dead_trees2), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb2rand_05 <- dead_trees2[sample(nrow(dead_trees2), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb2rand_1 <- dead_trees2[sample(nrow(dead_trees2), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb2rand_2 <- dead_trees2[sample(nrow(dead_trees2), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb2rand_3 <- dead_trees2[sample(nrow(dead_trees2), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens2DD_join <- left_join(dead_trees2,topdb2rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb2rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb2rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb2rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb2rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens2DD_repl <- topdb_sens2DD_join %>%
+  mutate(topdb2rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb2rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb2rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb2rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb2rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+tmp_topdb_w2DD_sims <- left_join(field_climate_08_23_inc,topdb_sens2DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb2rand_0:topdb2rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w2DD_sims$TD_dist_std <- (tmp_topdb_w2DD_sims$TD_dist - mean(tmp_topdb_w2DD_sims$TD_dist))/(2*sd(tmp_topdb_w2DD_sims$TD_dist))
+tmp_topdb_w2DD_sims$MWMT_dist_std <- (tmp_topdb_w2DD_sims$MWMT_dist - mean(tmp_topdb_w2DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w2DD_sims$MWMT_dist))
+tmp_topdb_w2DD_sims$SHM_dist_std <- (tmp_topdb_w2DD_sims$SHM_dist - mean(tmp_topdb_w2DD_sims$SHM_dist))/(2*sd(tmp_topdb_w2DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb2.DD05x <- glmmTMB(topdb2rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w2DD_sims, family = binomial(link = "logit"))
+
+modtopdb2.DD1x <- glmmTMB(topdb2rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w2DD_sims, family = binomial(link = "logit"))
+
+modtopdb2.DD2x <- glmmTMB(topdb2rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w2DD_sims, family = binomial(link = "logit"))
+
+modtopdb2.DD3x <- glmmTMB(topdb2rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w2DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim2topdb05x_df<-tidy(modtopdb2.DD05x, conf.int = TRUE, effects = "fixed")
+sim2topdb05x_df$model <- "Sim 2"
+sim2topdb05x_df$multoplier <- "0.5x"
+
+sim2topdb1x_df<-tidy(modtopdb2.DD1x, conf.int = TRUE, effects = "fixed")
+sim2topdb1x_df$model <- "Sim 2"
+sim2topdb1x_df$multoplier <- "1x"
+
+sim2topdb2x_df<-tidy(modtopdb2.DD2x, conf.int = TRUE, effects = "fixed")
+sim2topdb2x_df$model <- "Sim 2"
+sim2topdb2x_df$multoplier <- "2x"
+
+sim2topdb3x_df<-tidy(modtopdb2.DD3x, conf.int = TRUE, effects = "fixed")
+sim2topdb3x_df$model <- "Sim 2"
+sim2topdb3x_df$multoplier <- "3x"
+```
+
+## Sim 3
+```{r,echo=FALSE}
+dead_trees3 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(75)
+#0x - 0 trees
+topdb3rand_0 <- dead_trees3[sample(nrow(dead_trees3), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb3rand_05 <- dead_trees3[sample(nrow(dead_trees3), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb3rand_1 <- dead_trees3[sample(nrow(dead_trees3), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb3rand_2 <- dead_trees3[sample(nrow(dead_trees3), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb3rand_3 <- dead_trees3[sample(nrow(dead_trees3), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens3DD_join <- left_join(dead_trees3,topdb3rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb3rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb3rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb3rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb3rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens3DD_repl <- topdb_sens3DD_join %>%
+  mutate(topdb3rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb3rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb3rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb3rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb3rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w3DD_sims <- left_join(field_climate_08_23_inc,topdb_sens3DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb3rand_0:topdb3rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w3DD_sims$TD_dist_std <- (tmp_topdb_w3DD_sims$TD_dist - mean(tmp_topdb_w3DD_sims$TD_dist))/(2*sd(tmp_topdb_w3DD_sims$TD_dist))
+tmp_topdb_w3DD_sims$MWMT_dist_std <- (tmp_topdb_w3DD_sims$MWMT_dist - mean(tmp_topdb_w3DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w3DD_sims$MWMT_dist))
+tmp_topdb_w3DD_sims$SHM_dist_std <- (tmp_topdb_w3DD_sims$SHM_dist - mean(tmp_topdb_w3DD_sims$SHM_dist))/(2*sd(tmp_topdb_w3DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb3.DD05x <- glmmTMB(topdb3rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtopdb3.DD1x <- glmmTMB(topdb3rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtopdb3.DD2x <- glmmTMB(topdb3rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD2xlow <- glmmTMB(topdb3rand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w3DD_sims, family = binomial(link = "logit"))
+
+modtopdb3.DD3x <- glmmTMB(topdb3rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w3DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim3topdb05x_df<-tidy(modtopdb3.DD05x, conf.int = TRUE, effects = "fixed")
+sim3topdb05x_df$model <- "Sim 3"
+sim3topdb05x_df$multoplier <- "0.5x"
+
+sim3topdb1x_df<-tidy(modtopdb3.DD1x, conf.int = TRUE, effects = "fixed")
+sim3topdb1x_df$model <- "Sim 3"
+sim3topdb1x_df$multoplier <- "1x"
+
+sim3topdb2x_df<-tidy(modtopdb3.DD2x, conf.int = TRUE, effects = "fixed")
+sim3topdb2x_df$model <- "Sim 3"
+sim3topdb2x_df$multoplier <- "2x"
+
+sim3topdb3x_df<-tidy(modtopdb3.DD3x, conf.int = TRUE, effects = "fixed")
+sim3topdb3x_df$model <- "Sim 3"
+sim3topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 4
+```{r,echo=FALSE}
+dead_trees4 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(41)
+#0x - 0 trees
+topdb4rand_0 <- dead_trees4[sample(nrow(dead_trees4), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb4rand_05 <- dead_trees4[sample(nrow(dead_trees4), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb4rand_1 <- dead_trees4[sample(nrow(dead_trees4), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb4rand_2 <- dead_trees4[sample(nrow(dead_trees4), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb4rand_3 <- dead_trees4[sample(nrow(dead_trees4), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens4DD_join <- left_join(dead_trees4,topdb4rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb4rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb4rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb4rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb4rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens4DD_repl <- topdb_sens4DD_join %>%
+  mutate(topdb4rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb4rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb4rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb4rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb4rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w4DD_sims <- left_join(field_climate_08_23_inc,topdb_sens4DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb4rand_0:topdb4rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w4DD_sims$TD_dist_std <- (tmp_topdb_w4DD_sims$TD_dist - mean(tmp_topdb_w4DD_sims$TD_dist))/(2*sd(tmp_topdb_w4DD_sims$TD_dist))
+tmp_topdb_w4DD_sims$MWMT_dist_std <- (tmp_topdb_w4DD_sims$MWMT_dist - mean(tmp_topdb_w4DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w4DD_sims$MWMT_dist))
+tmp_topdb_w4DD_sims$SHM_dist_std <- (tmp_topdb_w4DD_sims$SHM_dist - mean(tmp_topdb_w4DD_sims$SHM_dist))/(2*sd(tmp_topdb_w4DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb4.DD05x <- glmmTMB(topdb4rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtopdb4.DD1x <- glmmTMB(topdb4rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtopdb4.DD2x <- glmmTMB(topdb4rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtopdb4.DD3x <- glmmTMB(topdb4rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w4DD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD3xlow <- glmmTMB(topdb4rand_3 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w4DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim4topdb05x_df<-tidy(modtopdb4.DD05x, conf.int = TRUE, effects = "fixed")
+sim4topdb05x_df$model <- "Sim 4"
+sim4topdb05x_df$multoplier <- "0.5x"
+
+sim4topdb1x_df<-tidy(modtopdb4.DD1x, conf.int = TRUE, effects = "fixed")
+sim4topdb1x_df$model <- "Sim 4"
+sim4topdb1x_df$multoplier <- "1x"
+
+sim4topdb2x_df<-tidy(modtopdb4.DD2x, conf.int = TRUE, effects = "fixed")
+sim4topdb2x_df$model <- "Sim 4"
+sim4topdb2x_df$multoplier <- "2x"
+
+sim4topdb3x_df<-tidy(modtopdb4.DD3x, conf.int = TRUE, effects = "fixed")
+sim4topdb3x_df$model <- "Sim 4"
+sim4topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 5
+```{r,echo=FALSE}
+dead_trees5 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(101)
+#0x - 0 trees
+topdb5rand_0 <- dead_trees5[sample(nrow(dead_trees5), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb5rand_05 <- dead_trees5[sample(nrow(dead_trees5), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb5rand_1 <- dead_trees5[sample(nrow(dead_trees5), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb5rand_2 <- dead_trees5[sample(nrow(dead_trees5), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb5rand_3 <- dead_trees5[sample(nrow(dead_trees5), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens5DD_join <- left_join(dead_trees5,topdb5rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb5rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb5rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb5rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb5rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens5DD_repl <- topdb_sens5DD_join %>%
+  mutate(topdb5rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb5rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb5rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb5rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb5rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w5DD_sims <- left_join(field_climate_08_23_inc,topdb_sens5DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb5rand_0:topdb5rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w5DD_sims$TD_dist_std <- (tmp_topdb_w5DD_sims$TD_dist - mean(tmp_topdb_w5DD_sims$TD_dist))/(2*sd(tmp_topdb_w5DD_sims$TD_dist))
+tmp_topdb_w5DD_sims$MWMT_dist_std <- (tmp_topdb_w5DD_sims$MWMT_dist - mean(tmp_topdb_w5DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w5DD_sims$MWMT_dist))
+tmp_topdb_w5DD_sims$SHM_dist_std <- (tmp_topdb_w5DD_sims$SHM_dist - mean(tmp_topdb_w5DD_sims$SHM_dist))/(2*sd(tmp_topdb_w5DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb5.DD05x <- glmmTMB(topdb5rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtopdb5.DD1x <- glmmTMB(topdb5rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtopdb5.DD2x <- glmmTMB(topdb5rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w5DD_sims, family = binomial(link = "logit"))
+
+modtopdb5.DD3x <- glmmTMB(topdb5rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w5DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim5topdb05x_df<-tidy(modtopdb5.DD05x, conf.int = TRUE, effects = "fixed")
+sim5topdb05x_df$model <- "Sim 5"
+sim5topdb05x_df$multoplier <- "0.5x"
+
+sim5topdb1x_df<-tidy(modtopdb5.DD1x, conf.int = TRUE, effects = "fixed")
+sim5topdb1x_df$model <- "Sim 5"
+sim5topdb1x_df$multoplier <- "1x"
+
+sim5topdb2x_df<-tidy(modtopdb5.DD2x, conf.int = TRUE, effects = "fixed")
+sim5topdb2x_df$model <- "Sim 5"
+sim5topdb2x_df$multoplier <- "2x"
+
+sim5topdb3x_df<-tidy(modtopdb5.DD3x, conf.int = TRUE, effects = "fixed")
+sim5topdb3x_df$model <- "Sim 5"
+sim5topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 6
+```{r,echo=FALSE}
+dead_trees6 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(80)
+#0x - 0 trees
+topdb6rand_0 <- dead_trees6[sample(nrow(dead_trees6), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb6rand_05 <- dead_trees6[sample(nrow(dead_trees6), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb6rand_1 <- dead_trees6[sample(nrow(dead_trees6), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb6rand_2 <- dead_trees6[sample(nrow(dead_trees6), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb6rand_3 <- dead_trees6[sample(nrow(dead_trees6), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens6DD_join <- left_join(dead_trees6,topdb6rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb6rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb6rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb6rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb6rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens6DD_repl <- topdb_sens6DD_join %>%
+  mutate(topdb6rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb6rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb6rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb6rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb6rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w6DD_sims <- left_join(field_climate_08_23_inc,topdb_sens6DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb6rand_0:topdb6rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w6DD_sims$TD_dist_std <- (tmp_topdb_w6DD_sims$TD_dist - mean(tmp_topdb_w6DD_sims$TD_dist))/(2*sd(tmp_topdb_w6DD_sims$TD_dist))
+tmp_topdb_w6DD_sims$MWMT_dist_std <- (tmp_topdb_w6DD_sims$MWMT_dist - mean(tmp_topdb_w6DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w6DD_sims$MWMT_dist))
+tmp_topdb_w6DD_sims$SHM_dist_std <- (tmp_topdb_w6DD_sims$SHM_dist - mean(tmp_topdb_w6DD_sims$SHM_dist))/(2*sd(tmp_topdb_w6DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb6.DD05x <- glmmTMB(topdb6rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtopdb6.DD1x <- glmmTMB(topdb6rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtopdb6.DD2x <- glmmTMB(topdb6rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w6DD_sims, family = binomial(link = "logit"))
+
+modtopdb6.DD3x <- glmmTMB(topdb6rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w6DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim6topdb05x_df<-tidy(modtopdb6.DD05x, conf.int = TRUE, effects = "fixed")
+sim6topdb05x_df$model <- "Sim 6"
+sim6topdb05x_df$multoplier <- "0.5x"
+
+sim6topdb1x_df<-tidy(modtopdb6.DD1x, conf.int = TRUE, effects = "fixed")
+sim6topdb1x_df$model <- "Sim 6"
+sim6topdb1x_df$multoplier <- "1x"
+
+sim6topdb2x_df<-tidy(modtopdb6.DD2x, conf.int = TRUE, effects = "fixed")
+sim6topdb2x_df$model <- "Sim 6"
+sim6topdb2x_df$multoplier <- "2x"
+
+sim6topdb3x_df<-tidy(modtopdb6.DD3x, conf.int = TRUE, effects = "fixed")
+sim6topdb3x_df$model <- "Sim 6"
+sim6topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 7
+```{r,echo=FALSE}
+dead_trees7 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(125)
+#0x - 0 trees
+topdb7rand_0 <- dead_trees7[sample(nrow(dead_trees7), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb7rand_05 <- dead_trees7[sample(nrow(dead_trees7), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb7rand_1 <- dead_trees7[sample(nrow(dead_trees7), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb7rand_2 <- dead_trees7[sample(nrow(dead_trees7), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb7rand_3 <- dead_trees7[sample(nrow(dead_trees7), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens7DD_join <- left_join(dead_trees7,topdb7rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb7rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb7rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb7rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb7rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens7DD_repl <- topdb_sens7DD_join %>%
+  mutate(topdb7rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb7rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb7rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb7rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb7rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w7DD_sims <- left_join(field_climate_08_23_inc,topdb_sens7DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb7rand_0:topdb7rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w7DD_sims$TD_dist_std <- (tmp_topdb_w7DD_sims$TD_dist - mean(tmp_topdb_w7DD_sims$TD_dist))/(2*sd(tmp_topdb_w7DD_sims$TD_dist))
+tmp_topdb_w7DD_sims$MWMT_dist_std <- (tmp_topdb_w7DD_sims$MWMT_dist - mean(tmp_topdb_w7DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w7DD_sims$MWMT_dist))
+tmp_topdb_w7DD_sims$SHM_dist_std <- (tmp_topdb_w7DD_sims$SHM_dist - mean(tmp_topdb_w7DD_sims$SHM_dist))/(2*sd(tmp_topdb_w7DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb7.DD05x <- glmmTMB(topdb7rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w7DD_sims, family = binomial(link = "logit"))
+
+modtopdb7.DD1x <- glmmTMB(topdb7rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w7DD_sims, family = binomial(link = "logit"))
+
+modtopdb7.DD2x <- glmmTMB(topdb7rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w7DD_sims, family = binomial(link = "logit"))
+
+modtopdb7.DD3x <- glmmTMB(topdb7rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w7DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim7topdb05x_df<-tidy(modtopdb7.DD05x, conf.int = TRUE, effects = "fixed")
+sim7topdb05x_df$model <- "Sim 7"
+sim7topdb05x_df$multoplier <- "0.5x"
+
+sim7topdb1x_df<-tidy(modtopdb7.DD1x, conf.int = TRUE, effects = "fixed")
+sim7topdb1x_df$model <- "Sim 7"
+sim7topdb1x_df$multoplier <- "1x"
+
+sim7topdb2x_df<-tidy(modtopdb7.DD2x, conf.int = TRUE, effects = "fixed")
+sim7topdb2x_df$model <- "Sim 7"
+sim7topdb2x_df$multoplier <- "2x"
+
+sim7topdb3x_df<-tidy(modtopdb7.DD3x, conf.int = TRUE, effects = "fixed")
+sim7topdb3x_df$model <- "Sim 7"
+sim7topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 8
+```{r,echo=FALSE}
+dead_trees8 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(106)
+#0x - 0 trees
+topdb8rand_0 <- dead_trees8[sample(nrow(dead_trees8), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb8rand_05 <- dead_trees8[sample(nrow(dead_trees8), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb8rand_1 <- dead_trees8[sample(nrow(dead_trees8), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb8rand_2 <- dead_trees8[sample(nrow(dead_trees8), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb8rand_3 <- dead_trees8[sample(nrow(dead_trees8), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens8DD_join <- left_join(dead_trees8,topdb8rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb8rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb8rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb8rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb8rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens8DD_repl <- topdb_sens8DD_join %>%
+  mutate(topdb8rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb8rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb8rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb8rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb8rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w8DD_sims <- left_join(field_climate_08_23_inc,topdb_sens8DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb8rand_0:topdb8rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w8DD_sims$TD_dist_std <- (tmp_topdb_w8DD_sims$TD_dist - mean(tmp_topdb_w8DD_sims$TD_dist))/(2*sd(tmp_topdb_w8DD_sims$TD_dist))
+tmp_topdb_w8DD_sims$MWMT_dist_std <- (tmp_topdb_w8DD_sims$MWMT_dist - mean(tmp_topdb_w8DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w8DD_sims$MWMT_dist))
+tmp_topdb_w8DD_sims$SHM_dist_std <- (tmp_topdb_w8DD_sims$SHM_dist - mean(tmp_topdb_w8DD_sims$SHM_dist))/(2*sd(tmp_topdb_w8DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb8.DD05x <- glmmTMB(topdb8rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w8DD_sims, family = binomial(link = "logit"))
+
+modtopdb8.DD1x <- glmmTMB(topdb8rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w8DD_sims, family = binomial(link = "logit"))
+
+modtopdb8.DD2x <- glmmTMB(topdb8rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w8DD_sims, family = binomial(link = "logit"))
+
+modtopdb8.DD3x <- glmmTMB(topdb8rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w8DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim8topdb05x_df<-tidy(modtopdb8.DD05x, conf.int = TRUE, effects = "fixed")
+sim8topdb05x_df$model <- "Sim 8"
+sim8topdb05x_df$multoplier <- "0.5x"
+
+sim8topdb1x_df<-tidy(modtopdb8.DD1x, conf.int = TRUE, effects = "fixed")
+sim8topdb1x_df$model <- "Sim 8"
+sim8topdb1x_df$multoplier <- "1x"
+
+sim8topdb2x_df<-tidy(modtopdb8.DD2x, conf.int = TRUE, effects = "fixed")
+sim8topdb2x_df$model <- "Sim 8"
+sim8topdb2x_df$multoplier <- "2x"
+
+sim8topdb3x_df<-tidy(modtopdb8.DD3x, conf.int = TRUE, effects = "fixed")
+sim8topdb3x_df$model <- "Sim 8"
+sim8topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 9
+```{r,echo=FALSE}
+dead_trees9 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(38)
+#0x - 0 trees
+topdb9rand_0 <- dead_trees9[sample(nrow(dead_trees9), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb9rand_05 <- dead_trees9[sample(nrow(dead_trees9), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb9rand_1 <- dead_trees9[sample(nrow(dead_trees9), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb9rand_2 <- dead_trees9[sample(nrow(dead_trees9), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb9rand_3 <- dead_trees9[sample(nrow(dead_trees9), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens9DD_join <- left_join(dead_trees9,topdb9rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb9rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb9rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb9rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb9rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens9DD_repl <- topdb_sens9DD_join %>%
+  mutate(topdb9rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb9rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb9rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb9rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb9rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w9DD_sims <- left_join(field_climate_08_23_inc,topdb_sens9DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb9rand_0:topdb9rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w9DD_sims$TD_dist_std <- (tmp_topdb_w9DD_sims$TD_dist - mean(tmp_topdb_w9DD_sims$TD_dist))/(2*sd(tmp_topdb_w9DD_sims$TD_dist))
+tmp_topdb_w9DD_sims$MWMT_dist_std <- (tmp_topdb_w9DD_sims$MWMT_dist - mean(tmp_topdb_w9DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w9DD_sims$MWMT_dist))
+tmp_topdb_w9DD_sims$SHM_dist_std <- (tmp_topdb_w9DD_sims$SHM_dist - mean(tmp_topdb_w9DD_sims$SHM_dist))/(2*sd(tmp_topdb_w9DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb9.DD05x <- glmmTMB(topdb9rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtopdb9.DD1x <- glmmTMB(topdb9rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtopdb9.DD2x <- glmmTMB(topdb9rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w9DD_sims, family = binomial(link = "logit"))
+
+modtopdb9.DD3x <- glmmTMB(topdb9rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w9DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim9topdb05x_df<-tidy(modtopdb9.DD05x, conf.int = TRUE, effects = "fixed")
+sim9topdb05x_df$model <- "Sim 9"
+sim9topdb05x_df$multoplier <- "0.5x"
+
+sim9topdb1x_df<-tidy(modtopdb9.DD1x, conf.int = TRUE, effects = "fixed")
+sim9topdb1x_df$model <- "Sim 9"
+sim9topdb1x_df$multoplier <- "1x"
+
+sim9topdb2x_df<-tidy(modtopdb9.DD2x, conf.int = TRUE, effects = "fixed")
+sim9topdb2x_df$model <- "Sim 9"
+sim9topdb2x_df$multoplier <- "2x"
+
+sim9topdb3x_df<-tidy(modtopdb9.DD3x, conf.int = TRUE, effects = "fixed")
+sim9topdb3x_df$model <- "Sim 9"
+sim9topdb3x_df$multoplier <- "3x"
+```
+
+
+## Sim 10
+```{r,echo=FALSE}
+dead_trees10 <- field_climate_08_23_inc %>%filter(LD=='D') %>%dplyr::select("Unique_ID","LD")
+set.seed(145)
+#0x - 0 trees
+topdb10rand_0 <- dead_trees10[sample(nrow(dead_trees10), size=0), ] %>% mutate(topdb_0 = 1)
+
+#0.5x - 83 trees
+topdb10rand_05 <- dead_trees10[sample(nrow(dead_trees10), size=13), ] %>% mutate(topdb_05 = 1)
+
+#1x - 165 trees
+topdb10rand_1 <- dead_trees10[sample(nrow(dead_trees10), size=25), ] %>% mutate(topdb_1 = 1)
+
+#2x - 331 trees
+topdb10rand_2 <- dead_trees10[sample(nrow(dead_trees10), size=50), ] %>% mutate(topdb_2 = 1)
+
+#3x - 496 trees
+topdb10rand_3 <- dead_trees10[sample(nrow(dead_trees10), size=75), ] %>% mutate(topdb_3 = 1)
+
+
+topdb_sens10DD_join <- left_join(dead_trees10,topdb10rand_0, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb10rand_05, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb10rand_1, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb10rand_2, by=c("Unique_ID","LD")) %>%
+  left_join(.,topdb10rand_3, by=c("Unique_ID","LD")) 
+
+topdb_sens10DD_repl <- topdb_sens10DD_join %>%
+  mutate(topdb10rand_0 = if_else(is.na(topdb_0),0, topdb_0))%>%
+  mutate(topdb10rand_05 = if_else(is.na(topdb_05),0, topdb_05))%>%
+  mutate(topdb10rand_1 = if_else(is.na(topdb_1),0, topdb_1))%>%
+  mutate(topdb10rand_2 = if_else(is.na(topdb_2),0, topdb_2))%>%
+  mutate(topdb10rand_3 = if_else(is.na(topdb_3),0, topdb_3))
+
+
+tmp_topdb_w10DD_sims <- left_join(field_climate_08_23_inc,topdb_sens10DD_repl, by=c("Unique_ID","LD")) %>%
+  mutate(across(c(topdb10rand_0:topdb10rand_3), ~ ifelse(is.na(.), TopDB01, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_topdb_w10DD_sims$TD_dist_std <- (tmp_topdb_w10DD_sims$TD_dist - mean(tmp_topdb_w10DD_sims$TD_dist))/(2*sd(tmp_topdb_w10DD_sims$TD_dist))
+tmp_topdb_w10DD_sims$MWMT_dist_std <- (tmp_topdb_w10DD_sims$MWMT_dist - mean(tmp_topdb_w10DD_sims$MWMT_dist))/(2*sd(tmp_topdb_w10DD_sims$MWMT_dist))
+tmp_topdb_w10DD_sims$SHM_dist_std <- (tmp_topdb_w10DD_sims$SHM_dist - mean(tmp_topdb_w10DD_sims$SHM_dist))/(2*sd(tmp_topdb_w10DD_sims$SHM_dist))
+```
+
+### Models
+```{r, echo=FALSE}
+modtopdb10.DD05x <- glmmTMB(topdb10rand_05 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD05xhigh <- glmmTMB(topdb10rand_05 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtopdb10.DD1x <- glmmTMB(topdb10rand_1 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD1xhigh <- glmmTMB(topdb10rand_1 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtopdb10.DD2x <- glmmTMB(topdb10rand_2 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtopdb.DD2xhigh <- glmmTMB(topdb10rand_2 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+
+modtopdb10.DD3x <- glmmTMB(topdb10rand_3 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = tmp_topdb_w10DD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim10topdb05x_df<-tidy(modtopdb10.DD05x, conf.int = TRUE, effects = "fixed")
+sim10topdb05x_df$model <- "Sim 10"
+sim10topdb05x_df$multoplier <- "0.5x"
+
+sim10topdb1x_df<-tidy(modtopdb10.DD1x, conf.int = TRUE, effects = "fixed")
+sim10topdb1x_df$model <- "Sim 10"
+sim10topdb1x_df$multoplier <- "1x"
+
+sim10topdb2x_df<-tidy(modtopdb10.DD2x, conf.int = TRUE, effects = "fixed")
+sim10topdb2x_df$model <- "Sim 10"
+sim10topdb2x_df$multoplier <- "2x"
+
+sim10topdb3x_df<-tidy(modtopdb10.DD3x, conf.int = TRUE, effects = "fixed")
+sim10topdb3x_df$model <- "Sim 10"
+sim10topdb3x_df$multoplier <- "3x"
+```
+
+## All coefs
+```{r,echo=FALSE}
+topdbcoefs_ALL <- bind_rows(modtopdbOG_df,sim1topdb0x_df,sim1topdb05x_df,sim1topdb1x_df,sim1topdb2x_df,sim1topdb3x_df,
+                      sim2topdb05x_df,sim2topdb1x_df,sim2topdb2x_df,sim2topdb3x_df,
+                       sim3topdb05x_df,sim3topdb1x_df,sim3topdb2x_df,sim3topdb3x_df,
+                       sim4topdb05x_df,sim4topdb1x_df,sim4topdb2x_df,sim4topdb3x_df,
+                       sim5topdb05x_df,sim5topdb1x_df,sim5topdb2x_df,sim5topdb3x_df,
+                      sim6topdb05x_df,sim6topdb1x_df,sim6topdb2x_df,sim6topdb3x_df,
+                     sim7topdb05x_df,sim7topdb1x_df,sim7topdb2x_df,sim7topdb3x_df,
+                   sim8topdb05x_df,sim8topdb1x_df,sim8topdb2x_df,sim8topdb3x_df,
+                       sim9topdb05x_df,sim9topdb1x_df,sim9topdb2x_df,sim9topdb3x_df,
+                       sim10topdb05x_df,sim10topdb1x_df,sim10topdb2x_df,sim10topdb3x_df) %>% rename(Simulation = model)
+
+topdbcoefs_ALL$model <- seq_len(nrow(topdbcoefs_ALL))
+write.csv(topdbcoefs_ALL, "topDiebackProb_sim_coefs.csv")
+```
+
+## Coefficient plots
+```{r,echo=FALSE}
+topdbcoefs_ALL <- read.csv("topDiebackProb_sim_coefs.csv")%>% mutate(term = fct_relevel(term, "(Intercept)", "I(TD_dist_std^2)","TD_dist_std","I(SHM_dist_std^2)","SHM_dist_std","I(MWMT_dist_std^2)","MWMT_dist_std")) %>%
+  mutate(multoplier = fct_relevel(multoplier, "0","0.5x","1x","2x","3x", "Original model")) 
+
+
+pal5_t <- turbo(5, alpha=1, begin=0.2, end=1)
+pal6 <- c("#3E9BFEFF", "#46F884FF", "#E1DD37FF", "#F05B12FF", "#7A0403FF","gray")
+
+(coeftopdb<- topdbcoefs_ALL %>% filter(term !="(Intercept)") %>% 
+              ggplot(aes(estimate, term, color=multoplier, xmin=conf.low,xmax = conf.high)) + 
+    theme_classic()+
+ 
+    geom_errorbar(position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+      geom_point(aes(color=multoplier),
+  fill="black",alpha=0.3,pch=21, position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+   scale_color_manual("Multiplier",values=pal6,labels = c('0x', '0.5x', '1x','2x','3x',"Original model"))+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y =NULL, title="Probability of top dieback")+
+   scale_y_discrete(labels = c(expression(paste("TD"^"2")),"TD",expression(paste("SHM"^"2")),"SHM",expression(paste("MWMT"^"2")),"MWMT"))+
+  theme(legend.position="none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11)))
+ggsave(coeftopdb, file="SSMT_FH_topdb_Sensitivity_coefs_title.png", dpi=600, height=6, width=6)
+```
+
+### Prediction data
+```{r, echo=FALSE, warning=FALSE}
+mydfLD_topdb0<-ggpredict(modtopdb.DD0xboth, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+
+mydfLD_topdb05low<-ggpredict(modtopdb.DD05xlow, terms =c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_topdb05high<-ggpredict(modtopdb.DD05xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_topdb1low<-ggpredict(modtopdb.DD1xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_topdb1high<-ggpredict(modtopdb.DD1xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_topdb2low<-ggpredict(modtopdb.DD2xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_topdb2high<-ggpredict(modtopdb.DD2xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+mydfLD_topdb3low<-ggpredict(modtopdb.DD3xlow, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+mydfLD_topdb3high<-ggpredict(modtopdb.DD3xhigh, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+```
+
+### Prediction plots
+```{r,echo=FALSE}
+palMSPnew <- c("#A36B2BFF","#94B9A7FF","#2686A0FF")
+palTDnew <- c("#2686A0FF", "#94B9A7FF", "#C6AA74FF", "#A36B2BFF")
+
+
+(ptopdb0<-ggplot(mydfLD_topdb0, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+ #   guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of top dieback", title="0x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb05low<-ggplot(mydfLD_topdb05low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of top dieback", title="0.5x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb05high<-ggplot(mydfLD_topdb05high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="0.5x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb1low<-ggplot(mydfLD_topdb1low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of top dieback", title="1x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb1high<-ggplot(mydfLD_topdb1high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="1x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb2low<-ggplot(mydfLD_topdb2low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of top dieback", title="2x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb2high<-ggplot(mydfLD_topdb2high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+  #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y =NULL, title="2x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb3low<-ggplot(mydfLD_topdb3low, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",
+         y ="Probability of top dieback", title="3x")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(ptopdb3high<-ggplot(mydfLD_topdb3high, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+   # guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",
+         y =NULL, title="3x - high")+
+    scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Multipanel
+```{r,echo=FALSE}
+Figtopdbsensmult <- (ptopdb0|plot_spacer())/(ptopdb05low|ptopdb05high)/(ptopdb1low|ptopdb1high)/(ptopdb2low|ptopdb2high)/(ptopdb3low|ptopdb3high)
+Figtopdbsensmultann <- Figtopdbsensmult + plot_annotation(tag_levels = c("a"))
+
+ggsave(Figtopdbsensmultann, file="SSMT_FH_topdieback_pred_Sensitivity.png", dpi=600, height=10.5, width=7)
+```
+
+

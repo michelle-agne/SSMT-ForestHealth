@@ -1,0 +1,3413 @@
+---
+title: "Sensitivity Foliage Disease - percentile approach"
+author: "Michelle C. Agne"
+date: "2026-10-01"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(glmmTMB)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(dotwhisker)
+```
+
+
+```{r, include=FALSE}
+# Read in data
+data <- read.csv("field_climate_08_23_w18_21_growth.csv", row.names=1, na.strings="NA")
+
+live_trees <- data %>% filter(TS==1|TS==2|TS==3) %>% 
+mutate(CC_CT_comb.f = as.factor(CC_CT_comb)) %>%
+  mutate(CT.f = as.factor(CT),
+         CC.f = as.factor(CC)) %>%
+   mutate(TopDB.f = as.factor(TopDB),
+          TopDB01.f = as.factor(TopDB01))%>%
+  mutate(TipDB.f = as.factor(TipDB),
+         TipDB01.f = as.factor(TipDB01)) %>%
+  mutate(BrDB.f = as.factor(BrDB),
+         BrDB01.f = as.factor(BrDB01)) %>%
+  mutate(SnkBl.f = as.factor(SnkBl),
+         SnkBl01.f = as.factor(SnkBl01)) %>%
+  mutate(PBl.f = as.factor(PBl),
+         PBl01.f = as.factor(PBl01)) %>%
+  mutate(Cankers.f = as.factor(Cankers),
+         Cankers01.f = as.factor(if_else(Cankers==0, 0,
+                             if_else(Cankers==1, 0, 1)))) %>%
+  mutate(Gall.f = as.factor(Gall))
+
+
+
+data_all_tmp <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, header=TRUE, na.strings="NA") %>%
+  mutate(LD = as.numeric(if_else(TS == 1, "1",
+                      if_else(TS == 2, "1",
+                              if_else(TS == 3, "1","0"))))) %>%
+  mutate(Site = as.factor(SITE_NAME))%>%
+  mutate(LD.f = as.factor(LD))
+
+#dead trees at the time of the 2015 survey
+data_all_tmp %>% filter(DD=="DD") %>% group_by(SITE_NAME, REGION) %>% summarize(total_dead = sum(count))
+```
+
+# Original model
+```{r, echo=FALSE}
+tmp<-data_all_tmp %>% filter(is.na(DD)) %>%filter(!is.na(SNC_NS_15)) %>% 
+  filter(Site != "StoneNursery") %>% filter(Site != "EvansCreek") %>% filter(Rhab_NS_15<2.1) %>%
+  filter(NeedRet_yrs_15 >1)
+#Standardized predictors 
+tmp$TD_dist_std <- (tmp$TD_dist - mean(tmp$TD_dist))/(2*sd(tmp$TD_dist))
+tmp$SNC_NS_15_std <- (tmp$SNC_NS_15 - mean(tmp$SNC_NS_15))/(2*sd(tmp$SNC_NS_15))
+#Standardized predictors for interpretation and coefficient plots
+modSNC.LDOG <- glmmTMB(LD ~ SNC_NS_15_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp, family = binomial(link = "logit"))
+
+ 
+modSNC.LDOG_df<-tidy(modSNC.LDOG, conf.int = TRUE, effects = "fixed")
+modSNC.LDOG_df$model <- "OG"
+modSNC.LDOG_df$Percent <- "OG"
+modSNC.LDOG_df$Rand <- "OG"
+ 
+ #Native units for prediction plots
+modSNC.LDns1 <- glmmTMB(LD ~ SNC_NS_15* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp, family = binomial(link = "logit"))
+
+
+```
+
+# Simulate SNC and Rhab values for DD trees
+- all zeroes
+- all threes
+- completely random between 0 and 3
+- sampled from values from the site and region
+```{r,echo=FALSE}
+data_cond<-data_all_tmp %>% 
+  dplyr::select(SITE_NAME, REGION, BLOCK,PLT,TAG, MAT_dist:CMI_dist,LD,  DD,SNC_NS_15, Rhab_NS_15, NeedRet_yrs_15) %>%
+  mutate(SNC_sim_0 = if_else(is.na(DD), SNC_NS_15, 0),
+         Rhab_sim_0 = if_else(is.na(DD), Rhab_NS_15, 0),
+         SNC_sim_3 = if_else(is.na(DD), SNC_NS_15, 3),
+         Rhab_sim_3 = if_else(is.na(DD), Rhab_NS_15, 3)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_1 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)%>%
+  
+      mutate(SNC_subset_values = list(c(1.5,2)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_15_2 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)%>%
+  
+    mutate(SNC_subset_values = list(c(2.5,3)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  ) ) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_25_3 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)%>%
+  
+    mutate(Rhab_subset_values = list(c(0.5,1)),
+    # Randomly assign - with replacement - from subset 
+    new_Rhab = ifelse(
+      lengths(Rhab_subset_values) > 0,
+      sample(unlist(Rhab_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-Rhab_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(Rhab_sim_05_1 = if_else(is.na(DD), Rhab_NS_15, new_Rhab)) %>%select(-new_Rhab)%>%
+  
+  mutate(Rhab_subset_values = list(c(1.5,2)),
+    # Randomly assign - with replacement - from subset 
+    new_Rhab = ifelse(
+      lengths(Rhab_subset_values) > 0,
+      sample(unlist(Rhab_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-Rhab_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(Rhab_sim_15_2 = if_else(is.na(DD), Rhab_NS_15, new_Rhab)) %>%select(-new_Rhab)%>%
+  
+    mutate(Rhab_subset_values = list(c(2.5,3)),
+    # Randomly assign - with replacement - from subset 
+    new_Rhab = ifelse(
+      lengths(Rhab_subset_values) > 0,
+      sample(unlist(Rhab_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-Rhab_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(Rhab_sim_25_3 = if_else(is.na(DD), Rhab_NS_15, new_Rhab)) %>%select(-new_Rhab)%>%
+  
+  group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)%>%
+  
+  group_by(SITE_NAME,REGION) %>%
+  mutate(Rhab_subset_values = list(Rhab_NS_15[!is.na(Rhab_NS_15)]),
+    # Randomly assign - with replacement - from subset 
+    new_Rhab = ifelse(
+      lengths(Rhab_subset_values) > 0,
+      sample(unlist(Rhab_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-Rhab_subset_values) %>%   ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(Rhab_sim_group = if_else(is.na(DD), Rhab_NS_15, new_Rhab)) %>%select(-new_Rhab)%>%
+  
+  group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC_rand = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA)) %>%
+  select(-SNC_subset_values) %>%  
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_rand = if_else(is.na(DD), SNC_NS_15, new_SNC_rand)) %>% select(-new_SNC_rand)%>%
+  
+  mutate(Rhab_subset_values = list(Rhab_NS_15[!is.na(Rhab_NS_15)]),
+    # Randomly assign - with replacement - from subset 
+    new_Rhab_rand = ifelse(
+      lengths(Rhab_subset_values) > 0,
+      sample(unlist(Rhab_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-Rhab_subset_values) %>%  
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(Rhab_sim_rand = if_else(is.na(DD), Rhab_NS_15, new_Rhab_rand)) %>% select(-new_Rhab_rand)
+```
+
+
+# Another approach
+0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100% have severe SNC
+0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100% have severe Rhabdocline
+
+## SNC
+## Sim 1
+```{r,echo=FALSE}
+set.seed(123)
+tmp_SNC_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC_wDD$Unique_ID <- seq_len(nrow(tmp_SNC_wDD))
+
+SNC_DDonly <- tmp_SNC_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#10% - 22 trees
+SNCrand_10 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=22), ] %>% mutate(SNC_10 = 3)
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DDonly[sample(nrow(SNC_DDonly), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DDonly,SNCrand_10, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+   left_join(.,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC10_rand = if_else(is.na(SNC_10),SNC_sim_05_25, SNC_10))%>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC10_group = if_else(is.na(SNC_10),SNC_sim_group_no03, SNC_10))%>%
+   mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC_wDD_sims <- left_join(tmp_SNC_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC10_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC_wDD_sims$TD_dist_std <- (tmp_SNC_wDD_sims$TD_dist - mean(tmp_SNC_wDD_sims$TD_dist))/(2*sd(tmp_SNC_wDD_sims$TD_dist))
+tmp_SNC_wDD_sims$SNC_NS_15_std <- (tmp_SNC_wDD_sims$SNC_NS_15 - mean(tmp_SNC_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC_wDD_sims$SNC_NS_15))
+tmp_SNC_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC_wDD_sims$SNC_sim_05_25))
+tmp_SNC_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC_wDD_sims$SNC_sim_group_no03))
+tmp_SNC_wDD_sims$SNC10_rand_std <- (tmp_SNC_wDD_sims$SNC10_rand - mean(tmp_SNC_wDD_sims$SNC10_rand))/(2*sd(tmp_SNC_wDD_sims$SNC10_rand))
+tmp_SNC_wDD_sims$SNC15_rand_std <- (tmp_SNC_wDD_sims$SNC15_rand - mean(tmp_SNC_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC_wDD_sims$SNC15_rand))
+tmp_SNC_wDD_sims$SNC20_rand_std <- (tmp_SNC_wDD_sims$SNC20_rand - mean(tmp_SNC_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC_wDD_sims$SNC20_rand))
+tmp_SNC_wDD_sims$SNC30_rand_std <- (tmp_SNC_wDD_sims$SNC30_rand - mean(tmp_SNC_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC_wDD_sims$SNC30_rand))
+tmp_SNC_wDD_sims$SNC40_rand_std <- (tmp_SNC_wDD_sims$SNC40_rand - mean(tmp_SNC_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC_wDD_sims$SNC40_rand))
+tmp_SNC_wDD_sims$SNC50_rand_std <- (tmp_SNC_wDD_sims$SNC50_rand - mean(tmp_SNC_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC_wDD_sims$SNC50_rand))
+tmp_SNC_wDD_sims$SNC60_rand_std <- (tmp_SNC_wDD_sims$SNC60_rand - mean(tmp_SNC_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC_wDD_sims$SNC60_rand))
+tmp_SNC_wDD_sims$SNC70_rand_std <- (tmp_SNC_wDD_sims$SNC70_rand - mean(tmp_SNC_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC_wDD_sims$SNC70_rand))
+tmp_SNC_wDD_sims$SNC80_rand_std <- (tmp_SNC_wDD_sims$SNC80_rand - mean(tmp_SNC_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC_wDD_sims$SNC80_rand))
+tmp_SNC_wDD_sims$SNC90_rand_std <- (tmp_SNC_wDD_sims$SNC90_rand - mean(tmp_SNC_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC_wDD_sims$SNC90_rand))
+tmp_SNC_wDD_sims$SNC10_group_std <- (tmp_SNC_wDD_sims$SNC10_group - mean(tmp_SNC_wDD_sims$SNC10_group))/(2*sd(tmp_SNC_wDD_sims$SNC10_group))
+tmp_SNC_wDD_sims$SNC15_group_std <- (tmp_SNC_wDD_sims$SNC15_group - mean(tmp_SNC_wDD_sims$SNC15_group))/(2*sd(tmp_SNC_wDD_sims$SNC15_group))
+tmp_SNC_wDD_sims$SNC20_group_std <- (tmp_SNC_wDD_sims$SNC20_group - mean(tmp_SNC_wDD_sims$SNC20_group))/(2*sd(tmp_SNC_wDD_sims$SNC20_group))
+tmp_SNC_wDD_sims$SNC30_group_std <- (tmp_SNC_wDD_sims$SNC30_group - mean(tmp_SNC_wDD_sims$SNC30_group))/(2*sd(tmp_SNC_wDD_sims$SNC30_group))
+tmp_SNC_wDD_sims$SNC40_group_std <- (tmp_SNC_wDD_sims$SNC40_group - mean(tmp_SNC_wDD_sims$SNC40_group))/(2*sd(tmp_SNC_wDD_sims$SNC40_group))
+tmp_SNC_wDD_sims$SNC50_group_std <- (tmp_SNC_wDD_sims$SNC50_group - mean(tmp_SNC_wDD_sims$SNC50_group))/(2*sd(tmp_SNC_wDD_sims$SNC50_group))
+tmp_SNC_wDD_sims$SNC60_group_std <- (tmp_SNC_wDD_sims$SNC60_group - mean(tmp_SNC_wDD_sims$SNC60_group))/(2*sd(tmp_SNC_wDD_sims$SNC60_group))
+tmp_SNC_wDD_sims$SNC70_group_std <- (tmp_SNC_wDD_sims$SNC70_group - mean(tmp_SNC_wDD_sims$SNC70_group))/(2*sd(tmp_SNC_wDD_sims$SNC70_group))
+tmp_SNC_wDD_sims$SNC80_group_std <- (tmp_SNC_wDD_sims$SNC80_group - mean(tmp_SNC_wDD_sims$SNC80_group))/(2*sd(tmp_SNC_wDD_sims$SNC80_group))
+tmp_SNC_wDD_sims$SNC90_group_std <- (tmp_SNC_wDD_sims$SNC90_group - mean(tmp_SNC_wDD_sims$SNC90_group))/(2*sd(tmp_SNC_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD10rand <- glmmTMB(LD ~ SNC10_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD10group <- glmmTMB(LD ~ SNC10_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+
+modSNC.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim1LDrand_df<-tidy(modSNC.LDrand, conf.int = TRUE, effects = "fixed")
+sim1LDrand_df$model <- "Sim 1"
+sim1LDrand_df$Percent <- "0"
+sim1LDrand_df$Rand <- "rand"
+
+modSNC.LDgroup_df<-tidy(modSNC.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC.LDgroup_df$model <- "Sim 1"
+modSNC.LDgroup_df$Percent <- "0"
+modSNC.LDgroup_df$Rand <- "Group"
+
+
+sim1LD10rand_df<-tidy(modSNC.LD10rand, conf.int = TRUE, effects = "fixed")
+sim1LD10rand_df$model <- "Sim 1"
+sim1LD10rand_df$Percent <- "10"
+sim1LD10rand_df$Rand <- "rand"
+
+sim1LD20rand_df<-tidy(modSNC.LD20rand, conf.int = TRUE, effects = "fixed")
+sim1LD20rand_df$model <- "Sim 1"
+sim1LD20rand_df$Percent <- "20"
+sim1LD20rand_df$Rand <- "rand"
+
+sim1LD30rand_df<-tidy(modSNC.LD30rand, conf.int = TRUE, effects = "fixed")
+sim1LD30rand_df$model <- "Sim 1"
+sim1LD30rand_df$Percent <- "30"
+sim1LD30rand_df$Rand <- "rand"
+
+sim1LD40rand_df<-tidy(modSNC.LD40rand, conf.int = TRUE, effects = "fixed")
+sim1LD40rand_df$model <- "Sim 1"
+sim1LD40rand_df$Percent <- "40"
+sim1LD40rand_df$Rand <- "rand"
+
+sim1LD50rand_df<-tidy(modSNC.LD50rand, conf.int = TRUE, effects = "fixed")
+sim1LD50rand_df$model <- "Sim 1"
+sim1LD50rand_df$Percent <- "50"
+sim1LD50rand_df$Rand <- "rand"
+
+sim1LD60rand_df<-tidy(modSNC.LD60rand, conf.int = TRUE, effects = "fixed")
+sim1LD60rand_df$model <- "Sim 1"
+sim1LD60rand_df$Percent <- "60"
+sim1LD60rand_df$Rand <- "rand"
+
+sim1LD70rand_df<-tidy(modSNC.LD70rand, conf.int = TRUE, effects = "fixed")
+sim1LD70rand_df$model <- "Sim 1"
+sim1LD70rand_df$Percent <- "70"
+sim1LD70rand_df$Rand <- "rand"
+
+sim1LD80rand_df<-tidy(modSNC.LD80rand, conf.int = TRUE, effects = "fixed")
+sim1LD80rand_df$model <- "Sim 1"
+sim1LD80rand_df$Percent <- "80"
+sim1LD80rand_df$Rand <- "rand"
+
+sim1LD90rand_df<-tidy(modSNC.LD90rand, conf.int = TRUE, effects = "fixed")
+sim1LD90rand_df$model <- "Sim 1"
+sim1LD90rand_df$Percent <- "90"
+sim1LD90rand_df$Rand <- "rand"
+
+sim1LD10group_df<-tidy(modSNC.LD10group, conf.int = TRUE, effects = "fixed")
+sim1LD10group_df$model <- "Sim 1"
+sim1LD10group_df$Percent <- "10"
+sim1LD10group_df$Rand <- "Group"
+
+sim1LD15group_df<-tidy(modSNC.LD15group, conf.int = TRUE, effects = "fixed")
+sim1LD15group_df$model <- "Sim 1"
+sim1LD15group_df$Percent <- "15"
+sim1LD15group_df$Rand <- "Group"
+
+sim1LD20group_df<-tidy(modSNC.LD20group, conf.int = TRUE, effects = "fixed")
+sim1LD20group_df$model <- "Sim 1"
+sim1LD20group_df$Percent <- "20"
+sim1LD20group_df$Rand <- "Group"
+
+sim1LD30group_df<-tidy(modSNC.LD30group, conf.int = TRUE, effects = "fixed")
+sim1LD30group_df$model <- "Sim 1"
+sim1LD30group_df$Percent <- "30"
+sim1LD30group_df$Rand <- "Group"
+
+sim1LD40group_df<-tidy(modSNC.LD40group, conf.int = TRUE, effects = "fixed")
+sim1LD40group_df$model <- "Sim 1"
+sim1LD40group_df$Percent <- "40"
+sim1LD40group_df$Rand <- "Group"
+
+sim1LD50group_df<-tidy(modSNC.LD50group, conf.int = TRUE, effects = "fixed")
+sim1LD50group_df$model <- "Sim 1"
+sim1LD50group_df$Percent <- "50"
+sim1LD50group_df$Rand <- "Group"
+
+sim1LD60group_df<-tidy(modSNC.LD60group, conf.int = TRUE, effects = "fixed")
+sim1LD60group_df$model <- "Sim 1"
+sim1LD60group_df$Percent <- "60"
+sim1LD60group_df$Rand <- "Group"
+
+sim1LD70group_df<-tidy(modSNC.LD70group, conf.int = TRUE, effects = "fixed")
+sim1LD70group_df$model <- "Sim 1"
+sim1LD70group_df$Percent <- "70"
+sim1LD70group_df$Rand <- "Group"
+
+sim1LD80group_df<-tidy(modSNC.LD80group, conf.int = TRUE, effects = "fixed")
+sim1LD80group_df$model <- "Sim 1"
+sim1LD80group_df$Percent <- "80"
+sim1LD80group_df$Rand <- "Group"
+
+sim1LD90group_df<-tidy(modSNC.LD90group, conf.int = TRUE, effects = "fixed")
+sim1LD90group_df$model <- "Sim 1"
+sim1LD90group_df$Percent <- "90"
+sim1LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 2
+```{r,echo=FALSE}
+set.seed(50)
+tmp_SNC2_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC2_wDD$Unique_ID <- seq_len(nrow(tmp_SNC2_wDD))
+
+SNC_DD2only <- tmp_SNC2_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD2only[sample(nrow(SNC_DD2only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD2only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC2_wDD_sims <- left_join(tmp_SNC2_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC2_wDD_sims$TD_dist_std <- (tmp_SNC2_wDD_sims$TD_dist - mean(tmp_SNC2_wDD_sims$TD_dist))/(2*sd(tmp_SNC2_wDD_sims$TD_dist))
+tmp_SNC2_wDD_sims$SNC_NS_15_std <- (tmp_SNC2_wDD_sims$SNC_NS_15 - mean(tmp_SNC2_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC2_wDD_sims$SNC_NS_15))
+tmp_SNC2_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC2_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC2_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC2_wDD_sims$SNC_sim_05_25))
+tmp_SNC2_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC2_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC2_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC2_wDD_sims$SNC_sim_group_no03))
+tmp_SNC2_wDD_sims$SNC15_rand_std <- (tmp_SNC2_wDD_sims$SNC15_rand - mean(tmp_SNC2_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC15_rand))
+tmp_SNC2_wDD_sims$SNC20_rand_std <- (tmp_SNC2_wDD_sims$SNC20_rand - mean(tmp_SNC2_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC20_rand))
+tmp_SNC2_wDD_sims$SNC30_rand_std <- (tmp_SNC2_wDD_sims$SNC30_rand - mean(tmp_SNC2_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC30_rand))
+tmp_SNC2_wDD_sims$SNC40_rand_std <- (tmp_SNC2_wDD_sims$SNC40_rand - mean(tmp_SNC2_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC40_rand))
+tmp_SNC2_wDD_sims$SNC50_rand_std <- (tmp_SNC2_wDD_sims$SNC50_rand - mean(tmp_SNC2_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC50_rand))
+tmp_SNC2_wDD_sims$SNC60_rand_std <- (tmp_SNC2_wDD_sims$SNC60_rand - mean(tmp_SNC2_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC60_rand))
+tmp_SNC2_wDD_sims$SNC70_rand_std <- (tmp_SNC2_wDD_sims$SNC70_rand - mean(tmp_SNC2_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC70_rand))
+tmp_SNC2_wDD_sims$SNC80_rand_std <- (tmp_SNC2_wDD_sims$SNC80_rand - mean(tmp_SNC2_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC80_rand))
+tmp_SNC2_wDD_sims$SNC90_rand_std <- (tmp_SNC2_wDD_sims$SNC90_rand - mean(tmp_SNC2_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC2_wDD_sims$SNC90_rand))
+tmp_SNC2_wDD_sims$SNC15_group_std <- (tmp_SNC2_wDD_sims$SNC15_group - mean(tmp_SNC2_wDD_sims$SNC15_group))/(2*sd(tmp_SNC2_wDD_sims$SNC15_group))
+tmp_SNC2_wDD_sims$SNC20_group_std <- (tmp_SNC2_wDD_sims$SNC20_group - mean(tmp_SNC2_wDD_sims$SNC20_group))/(2*sd(tmp_SNC2_wDD_sims$SNC20_group))
+tmp_SNC2_wDD_sims$SNC30_group_std <- (tmp_SNC2_wDD_sims$SNC30_group - mean(tmp_SNC2_wDD_sims$SNC30_group))/(2*sd(tmp_SNC2_wDD_sims$SNC30_group))
+tmp_SNC2_wDD_sims$SNC40_group_std <- (tmp_SNC2_wDD_sims$SNC40_group - mean(tmp_SNC2_wDD_sims$SNC40_group))/(2*sd(tmp_SNC2_wDD_sims$SNC40_group))
+tmp_SNC2_wDD_sims$SNC50_group_std <- (tmp_SNC2_wDD_sims$SNC50_group - mean(tmp_SNC2_wDD_sims$SNC50_group))/(2*sd(tmp_SNC2_wDD_sims$SNC50_group))
+tmp_SNC2_wDD_sims$SNC60_group_std <- (tmp_SNC2_wDD_sims$SNC60_group - mean(tmp_SNC2_wDD_sims$SNC60_group))/(2*sd(tmp_SNC2_wDD_sims$SNC60_group))
+tmp_SNC2_wDD_sims$SNC70_group_std <- (tmp_SNC2_wDD_sims$SNC70_group - mean(tmp_SNC2_wDD_sims$SNC70_group))/(2*sd(tmp_SNC2_wDD_sims$SNC70_group))
+tmp_SNC2_wDD_sims$SNC80_group_std <- (tmp_SNC2_wDD_sims$SNC80_group - mean(tmp_SNC2_wDD_sims$SNC80_group))/(2*sd(tmp_SNC2_wDD_sims$SNC80_group))
+tmp_SNC2_wDD_sims$SNC90_group_std <- (tmp_SNC2_wDD_sims$SNC90_group - mean(tmp_SNC2_wDD_sims$SNC90_group))/(2*sd(tmp_SNC2_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC2.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+
+modSNC2.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC2_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim2LDrand_df<-tidy(modSNC2.LDrand, conf.int = TRUE, effects = "fixed")
+sim2LDrand_df$model <- "Sim 2"
+sim2LDrand_df$Percent <- "0"
+sim2LDrand_df$Rand <- "rand"
+
+modSNC2.LDgroup_df<-tidy(modSNC2.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC2.LDgroup_df$model <- "Sim 2"
+modSNC2.LDgroup_df$Percent <- "0"
+modSNC2.LDgroup_df$Rand <- "Group"
+
+
+sim2LD15rand_df<-tidy(modSNC2.LD15rand, conf.int = TRUE, effects = "fixed")
+sim2LD15rand_df$model <- "Sim 2"
+sim2LD15rand_df$Percent <- "15"
+sim2LD15rand_df$Rand <- "rand"
+
+sim2LD20rand_df<-tidy(modSNC2.LD20rand, conf.int = TRUE, effects = "fixed")
+sim2LD20rand_df$model <- "Sim 2"
+sim2LD20rand_df$Percent <- "20"
+sim2LD20rand_df$Rand <- "rand"
+
+sim2LD30rand_df<-tidy(modSNC2.LD30rand, conf.int = TRUE, effects = "fixed")
+sim2LD30rand_df$model <- "Sim 2"
+sim2LD30rand_df$Percent <- "30"
+sim2LD30rand_df$Rand <- "rand"
+
+sim2LD40rand_df<-tidy(modSNC2.LD40rand, conf.int = TRUE, effects = "fixed")
+sim2LD40rand_df$model <- "Sim 2"
+sim2LD40rand_df$Percent <- "40"
+sim2LD40rand_df$Rand <- "rand"
+
+sim2LD50rand_df<-tidy(modSNC2.LD50rand, conf.int = TRUE, effects = "fixed")
+sim2LD50rand_df$model <- "Sim 2"
+sim2LD50rand_df$Percent <- "50"
+sim2LD50rand_df$Rand <- "rand"
+
+sim2LD60rand_df<-tidy(modSNC2.LD60rand, conf.int = TRUE, effects = "fixed")
+sim2LD60rand_df$model <- "Sim 2"
+sim2LD60rand_df$Percent <- "60"
+sim2LD60rand_df$Rand <- "rand"
+
+sim2LD70rand_df<-tidy(modSNC2.LD70rand, conf.int = TRUE, effects = "fixed")
+sim2LD70rand_df$model <- "Sim 2"
+sim2LD70rand_df$Percent <- "70"
+sim2LD70rand_df$Rand <- "rand"
+
+sim2LD80rand_df<-tidy(modSNC2.LD80rand, conf.int = TRUE, effects = "fixed")
+sim2LD80rand_df$model <- "Sim 2"
+sim2LD80rand_df$Percent <- "80"
+sim2LD80rand_df$Rand <- "rand"
+
+sim2LD90rand_df<-tidy(modSNC2.LD90rand, conf.int = TRUE, effects = "fixed")
+sim2LD90rand_df$model <- "Sim 2"
+sim2LD90rand_df$Percent <- "90"
+sim2LD90rand_df$Rand <- "rand"
+
+sim2LD15group_df<-tidy(modSNC2.LD15group, conf.int = TRUE, effects = "fixed")
+sim2LD15group_df$model <- "Sim 2"
+sim2LD15group_df$Percent <- "15"
+sim2LD15group_df$Rand <- "Group"
+
+sim2LD20group_df<-tidy(modSNC2.LD20group, conf.int = TRUE, effects = "fixed")
+sim2LD20group_df$model <- "Sim 2"
+sim2LD20group_df$Percent <- "20"
+sim2LD20group_df$Rand <- "Group"
+
+sim2LD30group_df<-tidy(modSNC2.LD30group, conf.int = TRUE, effects = "fixed")
+sim2LD30group_df$model <- "Sim 2"
+sim2LD30group_df$Percent <- "30"
+sim2LD30group_df$Rand <- "Group"
+
+sim2LD40group_df<-tidy(modSNC2.LD40group, conf.int = TRUE, effects = "fixed")
+sim2LD40group_df$model <- "Sim 2"
+sim2LD40group_df$Percent <- "40"
+sim2LD40group_df$Rand <- "Group"
+
+sim2LD50group_df<-tidy(modSNC2.LD50group, conf.int = TRUE, effects = "fixed")
+sim2LD50group_df$model <- "Sim 2"
+sim2LD50group_df$Percent <- "50"
+sim2LD50group_df$Rand <- "Group"
+
+sim2LD60group_df<-tidy(modSNC2.LD60group, conf.int = TRUE, effects = "fixed")
+sim2LD60group_df$model <- "Sim 2"
+sim2LD60group_df$Percent <- "60"
+sim2LD60group_df$Rand <- "Group"
+
+sim2LD70group_df<-tidy(modSNC2.LD70group, conf.int = TRUE, effects = "fixed")
+sim2LD70group_df$model <- "Sim 2"
+sim2LD70group_df$Percent <- "70"
+sim2LD70group_df$Rand <- "Group"
+
+sim2LD80group_df<-tidy(modSNC2.LD80group, conf.int = TRUE, effects = "fixed")
+sim2LD80group_df$model <- "Sim 2"
+sim2LD80group_df$Percent <- "80"
+sim2LD80group_df$Rand <- "Group"
+
+sim2LD90group_df<-tidy(modSNC2.LD90group, conf.int = TRUE, effects = "fixed")
+sim2LD90group_df$model <- "Sim 2"
+sim2LD90group_df$Percent <- "90"
+sim2LD90group_df$Rand <- "Group"
+```
+
+
+
+## Sim 3
+```{r,echo=FALSE}
+set.seed(100)
+tmp_SNC3_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC3_wDD$Unique_ID <- seq_len(nrow(tmp_SNC3_wDD))
+
+SNC_DD3only <- tmp_SNC3_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD3only[sample(nrow(SNC_DD3only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD3only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC3_wDD_sims <- left_join(tmp_SNC3_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC3_wDD_sims$TD_dist_std <- (tmp_SNC3_wDD_sims$TD_dist - mean(tmp_SNC3_wDD_sims$TD_dist))/(2*sd(tmp_SNC3_wDD_sims$TD_dist))
+tmp_SNC3_wDD_sims$SNC_NS_15_std <- (tmp_SNC3_wDD_sims$SNC_NS_15 - mean(tmp_SNC3_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC3_wDD_sims$SNC_NS_15))
+tmp_SNC3_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC3_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC3_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC3_wDD_sims$SNC_sim_05_25))
+tmp_SNC3_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC3_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC3_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC3_wDD_sims$SNC_sim_group_no03))
+tmp_SNC3_wDD_sims$SNC15_rand_std <- (tmp_SNC3_wDD_sims$SNC15_rand - mean(tmp_SNC3_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC15_rand))
+tmp_SNC3_wDD_sims$SNC20_rand_std <- (tmp_SNC3_wDD_sims$SNC20_rand - mean(tmp_SNC3_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC20_rand))
+tmp_SNC3_wDD_sims$SNC30_rand_std <- (tmp_SNC3_wDD_sims$SNC30_rand - mean(tmp_SNC3_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC30_rand))
+tmp_SNC3_wDD_sims$SNC40_rand_std <- (tmp_SNC3_wDD_sims$SNC40_rand - mean(tmp_SNC3_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC40_rand))
+tmp_SNC3_wDD_sims$SNC50_rand_std <- (tmp_SNC3_wDD_sims$SNC50_rand - mean(tmp_SNC3_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC50_rand))
+tmp_SNC3_wDD_sims$SNC60_rand_std <- (tmp_SNC3_wDD_sims$SNC60_rand - mean(tmp_SNC3_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC60_rand))
+tmp_SNC3_wDD_sims$SNC70_rand_std <- (tmp_SNC3_wDD_sims$SNC70_rand - mean(tmp_SNC3_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC70_rand))
+tmp_SNC3_wDD_sims$SNC80_rand_std <- (tmp_SNC3_wDD_sims$SNC80_rand - mean(tmp_SNC3_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC80_rand))
+tmp_SNC3_wDD_sims$SNC90_rand_std <- (tmp_SNC3_wDD_sims$SNC90_rand - mean(tmp_SNC3_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC3_wDD_sims$SNC90_rand))
+tmp_SNC3_wDD_sims$SNC15_group_std <- (tmp_SNC3_wDD_sims$SNC15_group - mean(tmp_SNC3_wDD_sims$SNC15_group))/(2*sd(tmp_SNC3_wDD_sims$SNC15_group))
+tmp_SNC3_wDD_sims$SNC20_group_std <- (tmp_SNC3_wDD_sims$SNC20_group - mean(tmp_SNC3_wDD_sims$SNC20_group))/(2*sd(tmp_SNC3_wDD_sims$SNC20_group))
+tmp_SNC3_wDD_sims$SNC30_group_std <- (tmp_SNC3_wDD_sims$SNC30_group - mean(tmp_SNC3_wDD_sims$SNC30_group))/(2*sd(tmp_SNC3_wDD_sims$SNC30_group))
+tmp_SNC3_wDD_sims$SNC40_group_std <- (tmp_SNC3_wDD_sims$SNC40_group - mean(tmp_SNC3_wDD_sims$SNC40_group))/(2*sd(tmp_SNC3_wDD_sims$SNC40_group))
+tmp_SNC3_wDD_sims$SNC50_group_std <- (tmp_SNC3_wDD_sims$SNC50_group - mean(tmp_SNC3_wDD_sims$SNC50_group))/(2*sd(tmp_SNC3_wDD_sims$SNC50_group))
+tmp_SNC3_wDD_sims$SNC60_group_std <- (tmp_SNC3_wDD_sims$SNC60_group - mean(tmp_SNC3_wDD_sims$SNC60_group))/(2*sd(tmp_SNC3_wDD_sims$SNC60_group))
+tmp_SNC3_wDD_sims$SNC70_group_std <- (tmp_SNC3_wDD_sims$SNC70_group - mean(tmp_SNC3_wDD_sims$SNC70_group))/(2*sd(tmp_SNC3_wDD_sims$SNC70_group))
+tmp_SNC3_wDD_sims$SNC80_group_std <- (tmp_SNC3_wDD_sims$SNC80_group - mean(tmp_SNC3_wDD_sims$SNC80_group))/(2*sd(tmp_SNC3_wDD_sims$SNC80_group))
+tmp_SNC3_wDD_sims$SNC90_group_std <- (tmp_SNC3_wDD_sims$SNC90_group - mean(tmp_SNC3_wDD_sims$SNC90_group))/(2*sd(tmp_SNC3_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC3.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim3LDrand_df<-tidy(modSNC3.LDrand, conf.int = TRUE, effects = "fixed")
+sim3LDrand_df$model <- "Sim 3"
+sim3LDrand_df$Percent <- "0"
+sim3LDrand_df$Rand <- "rand"
+
+modSNC3.LDgroup_df<-tidy(modSNC3.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC3.LDgroup_df$model <- "Sim 3"
+modSNC3.LDgroup_df$Percent <- "0"
+modSNC3.LDgroup_df$Rand <- "Group"
+
+
+sim3LD15rand_df<-tidy(modSNC3.LD15rand, conf.int = TRUE, effects = "fixed")
+sim3LD15rand_df$model <- "Sim 3"
+sim3LD15rand_df$Percent <- "15"
+sim3LD15rand_df$Rand <- "rand"
+
+sim3LD20rand_df<-tidy(modSNC3.LD20rand, conf.int = TRUE, effects = "fixed")
+sim3LD20rand_df$model <- "Sim 3"
+sim3LD20rand_df$Percent <- "20"
+sim3LD20rand_df$Rand <- "rand"
+
+sim3LD30rand_df<-tidy(modSNC3.LD30rand, conf.int = TRUE, effects = "fixed")
+sim3LD30rand_df$model <- "Sim 3"
+sim3LD30rand_df$Percent <- "30"
+sim3LD30rand_df$Rand <- "rand"
+
+sim3LD40rand_df<-tidy(modSNC3.LD40rand, conf.int = TRUE, effects = "fixed")
+sim3LD40rand_df$model <- "Sim 3"
+sim3LD40rand_df$Percent <- "40"
+sim3LD40rand_df$Rand <- "rand"
+
+sim3LD50rand_df<-tidy(modSNC3.LD50rand, conf.int = TRUE, effects = "fixed")
+sim3LD50rand_df$model <- "Sim 3"
+sim3LD50rand_df$Percent <- "50"
+sim3LD50rand_df$Rand <- "rand"
+
+sim3LD60rand_df<-tidy(modSNC3.LD60rand, conf.int = TRUE, effects = "fixed")
+sim3LD60rand_df$model <- "Sim 3"
+sim3LD60rand_df$Percent <- "60"
+sim3LD60rand_df$Rand <- "rand"
+
+sim3LD70rand_df<-tidy(modSNC3.LD70rand, conf.int = TRUE, effects = "fixed")
+sim3LD70rand_df$model <- "Sim 3"
+sim3LD70rand_df$Percent <- "70"
+sim3LD70rand_df$Rand <- "rand"
+
+sim3LD80rand_df<-tidy(modSNC3.LD80rand, conf.int = TRUE, effects = "fixed")
+sim3LD80rand_df$model <- "Sim 3"
+sim3LD80rand_df$Percent <- "80"
+sim3LD80rand_df$Rand <- "rand"
+
+sim3LD90rand_df<-tidy(modSNC3.LD90rand, conf.int = TRUE, effects = "fixed")
+sim3LD90rand_df$model <- "Sim 3"
+sim3LD90rand_df$Percent <- "90"
+sim3LD90rand_df$Rand <- "rand"
+
+sim3LD15group_df<-tidy(modSNC3.LD15group, conf.int = TRUE, effects = "fixed")
+sim3LD15group_df$model <- "Sim 3"
+sim3LD15group_df$Percent <- "15"
+sim3LD15group_df$Rand <- "Group"
+
+sim3LD20group_df<-tidy(modSNC3.LD20group, conf.int = TRUE, effects = "fixed")
+sim3LD20group_df$model <- "Sim 3"
+sim3LD20group_df$Percent <- "20"
+sim3LD20group_df$Rand <- "Group"
+
+sim3LD30group_df<-tidy(modSNC3.LD30group, conf.int = TRUE, effects = "fixed")
+sim3LD30group_df$model <- "Sim 3"
+sim3LD30group_df$Percent <- "30"
+sim3LD30group_df$Rand <- "Group"
+
+sim3LD40group_df<-tidy(modSNC3.LD40group, conf.int = TRUE, effects = "fixed")
+sim3LD40group_df$model <- "Sim 3"
+sim3LD40group_df$Percent <- "40"
+sim3LD40group_df$Rand <- "Group"
+
+sim3LD50group_df<-tidy(modSNC3.LD50group, conf.int = TRUE, effects = "fixed")
+sim3LD50group_df$model <- "Sim 3"
+sim3LD50group_df$Percent <- "50"
+sim3LD50group_df$Rand <- "Group"
+
+sim3LD60group_df<-tidy(modSNC3.LD60group, conf.int = TRUE, effects = "fixed")
+sim3LD60group_df$model <- "Sim 3"
+sim3LD60group_df$Percent <- "60"
+sim3LD60group_df$Rand <- "Group"
+
+sim3LD70group_df<-tidy(modSNC3.LD70group, conf.int = TRUE, effects = "fixed")
+sim3LD70group_df$model <- "Sim 3"
+sim3LD70group_df$Percent <- "70"
+sim3LD70group_df$Rand <- "Group"
+
+sim3LD80group_df<-tidy(modSNC3.LD80group, conf.int = TRUE, effects = "fixed")
+sim3LD80group_df$model <- "Sim 3"
+sim3LD80group_df$Percent <- "80"
+sim3LD80group_df$Rand <- "Group"
+
+sim3LD90group_df<-tidy(modSNC3.LD90group, conf.int = TRUE, effects = "fixed")
+sim3LD90group_df$model <- "Sim 3"
+sim3LD90group_df$Percent <- "90"
+sim3LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 4
+```{r,echo=FALSE}
+set.seed(23)
+tmp_SNC4_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC4_wDD$Unique_ID <- seq_len(nrow(tmp_SNC4_wDD))
+
+SNC_DD4only <- tmp_SNC4_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD4only[sample(nrow(SNC_DD4only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD4only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC4_wDD_sims <- left_join(tmp_SNC4_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC4_wDD_sims$TD_dist_std <- (tmp_SNC4_wDD_sims$TD_dist - mean(tmp_SNC4_wDD_sims$TD_dist))/(2*sd(tmp_SNC4_wDD_sims$TD_dist))
+tmp_SNC4_wDD_sims$SNC_NS_15_std <- (tmp_SNC4_wDD_sims$SNC_NS_15 - mean(tmp_SNC4_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC4_wDD_sims$SNC_NS_15))
+tmp_SNC4_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC4_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC4_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC4_wDD_sims$SNC_sim_05_25))
+tmp_SNC4_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC4_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC4_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC4_wDD_sims$SNC_sim_group_no03))
+tmp_SNC4_wDD_sims$SNC15_rand_std <- (tmp_SNC4_wDD_sims$SNC15_rand - mean(tmp_SNC4_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC15_rand))
+tmp_SNC4_wDD_sims$SNC20_rand_std <- (tmp_SNC4_wDD_sims$SNC20_rand - mean(tmp_SNC4_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC20_rand))
+tmp_SNC4_wDD_sims$SNC30_rand_std <- (tmp_SNC4_wDD_sims$SNC30_rand - mean(tmp_SNC4_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC30_rand))
+tmp_SNC4_wDD_sims$SNC40_rand_std <- (tmp_SNC4_wDD_sims$SNC40_rand - mean(tmp_SNC4_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC40_rand))
+tmp_SNC4_wDD_sims$SNC50_rand_std <- (tmp_SNC4_wDD_sims$SNC50_rand - mean(tmp_SNC4_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC50_rand))
+tmp_SNC4_wDD_sims$SNC60_rand_std <- (tmp_SNC4_wDD_sims$SNC60_rand - mean(tmp_SNC4_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC60_rand))
+tmp_SNC4_wDD_sims$SNC70_rand_std <- (tmp_SNC4_wDD_sims$SNC70_rand - mean(tmp_SNC4_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC70_rand))
+tmp_SNC4_wDD_sims$SNC80_rand_std <- (tmp_SNC4_wDD_sims$SNC80_rand - mean(tmp_SNC4_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC80_rand))
+tmp_SNC4_wDD_sims$SNC90_rand_std <- (tmp_SNC4_wDD_sims$SNC90_rand - mean(tmp_SNC4_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC4_wDD_sims$SNC90_rand))
+tmp_SNC4_wDD_sims$SNC15_group_std <- (tmp_SNC4_wDD_sims$SNC15_group - mean(tmp_SNC4_wDD_sims$SNC15_group))/(2*sd(tmp_SNC4_wDD_sims$SNC15_group))
+tmp_SNC4_wDD_sims$SNC20_group_std <- (tmp_SNC4_wDD_sims$SNC20_group - mean(tmp_SNC4_wDD_sims$SNC20_group))/(2*sd(tmp_SNC4_wDD_sims$SNC20_group))
+tmp_SNC4_wDD_sims$SNC30_group_std <- (tmp_SNC4_wDD_sims$SNC30_group - mean(tmp_SNC4_wDD_sims$SNC30_group))/(2*sd(tmp_SNC4_wDD_sims$SNC30_group))
+tmp_SNC4_wDD_sims$SNC40_group_std <- (tmp_SNC4_wDD_sims$SNC40_group - mean(tmp_SNC4_wDD_sims$SNC40_group))/(2*sd(tmp_SNC4_wDD_sims$SNC40_group))
+tmp_SNC4_wDD_sims$SNC50_group_std <- (tmp_SNC4_wDD_sims$SNC50_group - mean(tmp_SNC4_wDD_sims$SNC50_group))/(2*sd(tmp_SNC4_wDD_sims$SNC50_group))
+tmp_SNC4_wDD_sims$SNC60_group_std <- (tmp_SNC4_wDD_sims$SNC60_group - mean(tmp_SNC4_wDD_sims$SNC60_group))/(2*sd(tmp_SNC4_wDD_sims$SNC60_group))
+tmp_SNC4_wDD_sims$SNC70_group_std <- (tmp_SNC4_wDD_sims$SNC70_group - mean(tmp_SNC4_wDD_sims$SNC70_group))/(2*sd(tmp_SNC4_wDD_sims$SNC70_group))
+tmp_SNC4_wDD_sims$SNC80_group_std <- (tmp_SNC4_wDD_sims$SNC80_group - mean(tmp_SNC4_wDD_sims$SNC80_group))/(2*sd(tmp_SNC4_wDD_sims$SNC80_group))
+tmp_SNC4_wDD_sims$SNC90_group_std <- (tmp_SNC4_wDD_sims$SNC90_group - mean(tmp_SNC4_wDD_sims$SNC90_group))/(2*sd(tmp_SNC4_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC4.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+modSNC4.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC4_wDD_sims, family = binomial(link = "logit"))
+
+
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim4LDrand_df<-tidy(modSNC4.LDrand, conf.int = TRUE, effects = "fixed")
+sim4LDrand_df$model <- "Sim 4"
+sim4LDrand_df$Percent <- "0"
+sim4LDrand_df$Rand <- "rand"
+
+modSNC4.LDgroup_df<-tidy(modSNC4.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC4.LDgroup_df$model <- "Sim 4"
+modSNC4.LDgroup_df$Percent <- "0"
+modSNC4.LDgroup_df$Rand <- "Group"
+
+
+sim4LD15rand_df<-tidy(modSNC4.LD15rand, conf.int = TRUE, effects = "fixed")
+sim4LD15rand_df$model <- "Sim 4"
+sim4LD15rand_df$Percent <- "15"
+sim4LD15rand_df$Rand <- "rand"
+
+sim4LD20rand_df<-tidy(modSNC4.LD20rand, conf.int = TRUE, effects = "fixed")
+sim4LD20rand_df$model <- "Sim 4"
+sim4LD20rand_df$Percent <- "20"
+sim4LD20rand_df$Rand <- "rand"
+
+sim4LD30rand_df<-tidy(modSNC4.LD30rand, conf.int = TRUE, effects = "fixed")
+sim4LD30rand_df$model <- "Sim 4"
+sim4LD30rand_df$Percent <- "30"
+sim4LD30rand_df$Rand <- "rand"
+
+sim4LD40rand_df<-tidy(modSNC4.LD40rand, conf.int = TRUE, effects = "fixed")
+sim4LD40rand_df$model <- "Sim 4"
+sim4LD40rand_df$Percent <- "40"
+sim4LD40rand_df$Rand <- "rand"
+
+sim4LD50rand_df<-tidy(modSNC4.LD50rand, conf.int = TRUE, effects = "fixed")
+sim4LD50rand_df$model <- "Sim 4"
+sim4LD50rand_df$Percent <- "50"
+sim4LD50rand_df$Rand <- "rand"
+
+sim4LD60rand_df<-tidy(modSNC4.LD60rand, conf.int = TRUE, effects = "fixed")
+sim4LD60rand_df$model <- "Sim 4"
+sim4LD60rand_df$Percent <- "60"
+sim4LD60rand_df$Rand <- "rand"
+
+sim4LD70rand_df<-tidy(modSNC4.LD70rand, conf.int = TRUE, effects = "fixed")
+sim4LD70rand_df$model <- "Sim 4"
+sim4LD70rand_df$Percent <- "70"
+sim4LD70rand_df$Rand <- "rand"
+
+sim4LD80rand_df<-tidy(modSNC4.LD80rand, conf.int = TRUE, effects = "fixed")
+sim4LD80rand_df$model <- "Sim 4"
+sim4LD80rand_df$Percent <- "80"
+sim4LD80rand_df$Rand <- "rand"
+
+sim4LD90rand_df<-tidy(modSNC4.LD90rand, conf.int = TRUE, effects = "fixed")
+sim4LD90rand_df$model <- "Sim 4"
+sim4LD90rand_df$Percent <- "90"
+sim4LD90rand_df$Rand <- "rand"
+
+sim4LD15group_df<-tidy(modSNC4.LD15group, conf.int = TRUE, effects = "fixed")
+sim4LD15group_df$model <- "Sim 4"
+sim4LD15group_df$Percent <- "15"
+sim4LD15group_df$Rand <- "Group"
+
+sim4LD20group_df<-tidy(modSNC4.LD20group, conf.int = TRUE, effects = "fixed")
+sim4LD20group_df$model <- "Sim 4"
+sim4LD20group_df$Percent <- "20"
+sim4LD20group_df$Rand <- "Group"
+
+sim4LD30group_df<-tidy(modSNC4.LD30group, conf.int = TRUE, effects = "fixed")
+sim4LD30group_df$model <- "Sim 4"
+sim4LD30group_df$Percent <- "30"
+sim4LD30group_df$Rand <- "Group"
+
+sim4LD40group_df<-tidy(modSNC4.LD40group, conf.int = TRUE, effects = "fixed")
+sim4LD40group_df$model <- "Sim 4"
+sim4LD40group_df$Percent <- "40"
+sim4LD40group_df$Rand <- "Group"
+
+sim4LD50group_df<-tidy(modSNC4.LD50group, conf.int = TRUE, effects = "fixed")
+sim4LD50group_df$model <- "Sim 4"
+sim4LD50group_df$Percent <- "50"
+sim4LD50group_df$Rand <- "Group"
+
+sim4LD60group_df<-tidy(modSNC4.LD60group, conf.int = TRUE, effects = "fixed")
+sim4LD60group_df$model <- "Sim 4"
+sim4LD60group_df$Percent <- "60"
+sim4LD60group_df$Rand <- "Group"
+
+sim4LD70group_df<-tidy(modSNC4.LD70group, conf.int = TRUE, effects = "fixed")
+sim4LD70group_df$model <- "Sim 4"
+sim4LD70group_df$Percent <- "70"
+sim4LD70group_df$Rand <- "Group"
+
+sim4LD80group_df<-tidy(modSNC4.LD80group, conf.int = TRUE, effects = "fixed")
+sim4LD80group_df$model <- "Sim 4"
+sim4LD80group_df$Percent <- "80"
+sim4LD80group_df$Rand <- "Group"
+
+sim4LD90group_df<-tidy(modSNC4.LD90group, conf.int = TRUE, effects = "fixed")
+sim4LD90group_df$model <- "Sim 4"
+sim4LD90group_df$Percent <- "90"
+sim4LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 5
+```{r,echo=FALSE}
+set.seed(89)
+tmp_SNC5_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC5_wDD$Unique_ID <- seq_len(nrow(tmp_SNC5_wDD))
+
+SNC_DD5only <- tmp_SNC5_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD5only[sample(nrow(SNC_DD5only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD5only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC5_wDD_sims <- left_join(tmp_SNC5_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC5_wDD_sims$TD_dist_std <- (tmp_SNC5_wDD_sims$TD_dist - mean(tmp_SNC5_wDD_sims$TD_dist))/(2*sd(tmp_SNC5_wDD_sims$TD_dist))
+tmp_SNC5_wDD_sims$SNC_NS_15_std <- (tmp_SNC5_wDD_sims$SNC_NS_15 - mean(tmp_SNC5_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC5_wDD_sims$SNC_NS_15))
+tmp_SNC5_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC5_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC5_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC5_wDD_sims$SNC_sim_05_25))
+tmp_SNC5_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC5_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC5_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC5_wDD_sims$SNC_sim_group_no03))
+tmp_SNC5_wDD_sims$SNC15_rand_std <- (tmp_SNC5_wDD_sims$SNC15_rand - mean(tmp_SNC5_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC15_rand))
+tmp_SNC5_wDD_sims$SNC20_rand_std <- (tmp_SNC5_wDD_sims$SNC20_rand - mean(tmp_SNC5_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC20_rand))
+tmp_SNC5_wDD_sims$SNC30_rand_std <- (tmp_SNC5_wDD_sims$SNC30_rand - mean(tmp_SNC5_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC30_rand))
+tmp_SNC5_wDD_sims$SNC40_rand_std <- (tmp_SNC5_wDD_sims$SNC40_rand - mean(tmp_SNC5_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC40_rand))
+tmp_SNC5_wDD_sims$SNC50_rand_std <- (tmp_SNC5_wDD_sims$SNC50_rand - mean(tmp_SNC5_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC50_rand))
+tmp_SNC5_wDD_sims$SNC60_rand_std <- (tmp_SNC5_wDD_sims$SNC60_rand - mean(tmp_SNC5_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC60_rand))
+tmp_SNC5_wDD_sims$SNC70_rand_std <- (tmp_SNC5_wDD_sims$SNC70_rand - mean(tmp_SNC5_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC70_rand))
+tmp_SNC5_wDD_sims$SNC80_rand_std <- (tmp_SNC5_wDD_sims$SNC80_rand - mean(tmp_SNC5_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC80_rand))
+tmp_SNC5_wDD_sims$SNC90_rand_std <- (tmp_SNC5_wDD_sims$SNC90_rand - mean(tmp_SNC5_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC5_wDD_sims$SNC90_rand))
+tmp_SNC5_wDD_sims$SNC15_group_std <- (tmp_SNC5_wDD_sims$SNC15_group - mean(tmp_SNC5_wDD_sims$SNC15_group))/(2*sd(tmp_SNC5_wDD_sims$SNC15_group))
+tmp_SNC5_wDD_sims$SNC20_group_std <- (tmp_SNC5_wDD_sims$SNC20_group - mean(tmp_SNC5_wDD_sims$SNC20_group))/(2*sd(tmp_SNC5_wDD_sims$SNC20_group))
+tmp_SNC5_wDD_sims$SNC30_group_std <- (tmp_SNC5_wDD_sims$SNC30_group - mean(tmp_SNC5_wDD_sims$SNC30_group))/(2*sd(tmp_SNC5_wDD_sims$SNC30_group))
+tmp_SNC5_wDD_sims$SNC40_group_std <- (tmp_SNC5_wDD_sims$SNC40_group - mean(tmp_SNC5_wDD_sims$SNC40_group))/(2*sd(tmp_SNC5_wDD_sims$SNC40_group))
+tmp_SNC5_wDD_sims$SNC50_group_std <- (tmp_SNC5_wDD_sims$SNC50_group - mean(tmp_SNC5_wDD_sims$SNC50_group))/(2*sd(tmp_SNC5_wDD_sims$SNC50_group))
+tmp_SNC5_wDD_sims$SNC60_group_std <- (tmp_SNC5_wDD_sims$SNC60_group - mean(tmp_SNC5_wDD_sims$SNC60_group))/(2*sd(tmp_SNC5_wDD_sims$SNC60_group))
+tmp_SNC5_wDD_sims$SNC70_group_std <- (tmp_SNC5_wDD_sims$SNC70_group - mean(tmp_SNC5_wDD_sims$SNC70_group))/(2*sd(tmp_SNC5_wDD_sims$SNC70_group))
+tmp_SNC5_wDD_sims$SNC80_group_std <- (tmp_SNC5_wDD_sims$SNC80_group - mean(tmp_SNC5_wDD_sims$SNC80_group))/(2*sd(tmp_SNC5_wDD_sims$SNC80_group))
+tmp_SNC5_wDD_sims$SNC90_group_std <- (tmp_SNC5_wDD_sims$SNC90_group - mean(tmp_SNC5_wDD_sims$SNC90_group))/(2*sd(tmp_SNC5_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC5.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+
+modSNC5.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC5_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim5LDrand_df<-tidy(modSNC5.LDrand, conf.int = TRUE, effects = "fixed")
+sim5LDrand_df$model <- "Sim 5"
+sim5LDrand_df$Percent <- "0"
+sim5LDrand_df$Rand <- "rand"
+
+modSNC5.LDgroup_df<-tidy(modSNC5.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC5.LDgroup_df$model <- "Sim 5"
+modSNC5.LDgroup_df$Percent <- "0"
+modSNC5.LDgroup_df$Rand <- "Group"
+
+
+sim5LD15rand_df<-tidy(modSNC5.LD15rand, conf.int = TRUE, effects = "fixed")
+sim5LD15rand_df$model <- "Sim 5"
+sim5LD15rand_df$Percent <- "15"
+sim5LD15rand_df$Rand <- "rand"
+
+sim5LD20rand_df<-tidy(modSNC5.LD20rand, conf.int = TRUE, effects = "fixed")
+sim5LD20rand_df$model <- "Sim 5"
+sim5LD20rand_df$Percent <- "20"
+sim5LD20rand_df$Rand <- "rand"
+
+sim5LD30rand_df<-tidy(modSNC5.LD30rand, conf.int = TRUE, effects = "fixed")
+sim5LD30rand_df$model <- "Sim 5"
+sim5LD30rand_df$Percent <- "30"
+sim5LD30rand_df$Rand <- "rand"
+
+sim5LD40rand_df<-tidy(modSNC5.LD40rand, conf.int = TRUE, effects = "fixed")
+sim5LD40rand_df$model <- "Sim 5"
+sim5LD40rand_df$Percent <- "40"
+sim5LD40rand_df$Rand <- "rand"
+
+sim5LD50rand_df<-tidy(modSNC5.LD50rand, conf.int = TRUE, effects = "fixed")
+sim5LD50rand_df$model <- "Sim 5"
+sim5LD50rand_df$Percent <- "50"
+sim5LD50rand_df$Rand <- "rand"
+
+sim5LD60rand_df<-tidy(modSNC5.LD60rand, conf.int = TRUE, effects = "fixed")
+sim5LD60rand_df$model <- "Sim 5"
+sim5LD60rand_df$Percent <- "60"
+sim5LD60rand_df$Rand <- "rand"
+
+sim5LD70rand_df<-tidy(modSNC5.LD70rand, conf.int = TRUE, effects = "fixed")
+sim5LD70rand_df$model <- "Sim 5"
+sim5LD70rand_df$Percent <- "70"
+sim5LD70rand_df$Rand <- "rand"
+
+sim5LD80rand_df<-tidy(modSNC5.LD80rand, conf.int = TRUE, effects = "fixed")
+sim5LD80rand_df$model <- "Sim 5"
+sim5LD80rand_df$Percent <- "80"
+sim5LD80rand_df$Rand <- "rand"
+
+sim5LD90rand_df<-tidy(modSNC5.LD90rand, conf.int = TRUE, effects = "fixed")
+sim5LD90rand_df$model <- "Sim 5"
+sim5LD90rand_df$Percent <- "90"
+sim5LD90rand_df$Rand <- "rand"
+
+sim5LD15group_df<-tidy(modSNC5.LD15group, conf.int = TRUE, effects = "fixed")
+sim5LD15group_df$model <- "Sim 5"
+sim5LD15group_df$Percent <- "15"
+sim5LD15group_df$Rand <- "Group"
+
+sim5LD20group_df<-tidy(modSNC5.LD20group, conf.int = TRUE, effects = "fixed")
+sim5LD20group_df$model <- "Sim 5"
+sim5LD20group_df$Percent <- "20"
+sim5LD20group_df$Rand <- "Group"
+
+sim5LD30group_df<-tidy(modSNC5.LD30group, conf.int = TRUE, effects = "fixed")
+sim5LD30group_df$model <- "Sim 5"
+sim5LD30group_df$Percent <- "30"
+sim5LD30group_df$Rand <- "Group"
+
+sim5LD40group_df<-tidy(modSNC5.LD40group, conf.int = TRUE, effects = "fixed")
+sim5LD40group_df$model <- "Sim 5"
+sim5LD40group_df$Percent <- "40"
+sim5LD40group_df$Rand <- "Group"
+
+sim5LD50group_df<-tidy(modSNC5.LD50group, conf.int = TRUE, effects = "fixed")
+sim5LD50group_df$model <- "Sim 5"
+sim5LD50group_df$Percent <- "50"
+sim5LD50group_df$Rand <- "Group"
+
+sim5LD60group_df<-tidy(modSNC5.LD60group, conf.int = TRUE, effects = "fixed")
+sim5LD60group_df$model <- "Sim 5"
+sim5LD60group_df$Percent <- "60"
+sim5LD60group_df$Rand <- "Group"
+
+sim5LD70group_df<-tidy(modSNC5.LD70group, conf.int = TRUE, effects = "fixed")
+sim5LD70group_df$model <- "Sim 5"
+sim5LD70group_df$Percent <- "70"
+sim5LD70group_df$Rand <- "Group"
+
+sim5LD80group_df<-tidy(modSNC5.LD80group, conf.int = TRUE, effects = "fixed")
+sim5LD80group_df$model <- "Sim 5"
+sim5LD80group_df$Percent <- "80"
+sim5LD80group_df$Rand <- "Group"
+
+sim5LD90group_df<-tidy(modSNC5.LD90group, conf.int = TRUE, effects = "fixed")
+sim5LD90group_df$model <- "Sim 5"
+sim5LD90group_df$Percent <- "90"
+sim5LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 6
+```{r,echo=FALSE}
+set.seed(151)
+tmp_SNC6_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC6_wDD$Unique_ID <- seq_len(nrow(tmp_SNC6_wDD))
+
+SNC_DD6only <- tmp_SNC6_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD6only[sample(nrow(SNC_DD6only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD6only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC6_wDD_sims <- left_join(tmp_SNC6_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC6_wDD_sims$TD_dist_std <- (tmp_SNC6_wDD_sims$TD_dist - mean(tmp_SNC6_wDD_sims$TD_dist))/(2*sd(tmp_SNC6_wDD_sims$TD_dist))
+tmp_SNC6_wDD_sims$SNC_NS_15_std <- (tmp_SNC6_wDD_sims$SNC_NS_15 - mean(tmp_SNC6_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC6_wDD_sims$SNC_NS_15))
+tmp_SNC6_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC6_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC6_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC6_wDD_sims$SNC_sim_05_25))
+tmp_SNC6_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC6_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC6_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC6_wDD_sims$SNC_sim_group_no03))
+tmp_SNC6_wDD_sims$SNC15_rand_std <- (tmp_SNC6_wDD_sims$SNC15_rand - mean(tmp_SNC6_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC15_rand))
+tmp_SNC6_wDD_sims$SNC20_rand_std <- (tmp_SNC6_wDD_sims$SNC20_rand - mean(tmp_SNC6_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC20_rand))
+tmp_SNC6_wDD_sims$SNC30_rand_std <- (tmp_SNC6_wDD_sims$SNC30_rand - mean(tmp_SNC6_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC30_rand))
+tmp_SNC6_wDD_sims$SNC40_rand_std <- (tmp_SNC6_wDD_sims$SNC40_rand - mean(tmp_SNC6_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC40_rand))
+tmp_SNC6_wDD_sims$SNC50_rand_std <- (tmp_SNC6_wDD_sims$SNC50_rand - mean(tmp_SNC6_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC50_rand))
+tmp_SNC6_wDD_sims$SNC60_rand_std <- (tmp_SNC6_wDD_sims$SNC60_rand - mean(tmp_SNC6_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC60_rand))
+tmp_SNC6_wDD_sims$SNC70_rand_std <- (tmp_SNC6_wDD_sims$SNC70_rand - mean(tmp_SNC6_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC70_rand))
+tmp_SNC6_wDD_sims$SNC80_rand_std <- (tmp_SNC6_wDD_sims$SNC80_rand - mean(tmp_SNC6_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC80_rand))
+tmp_SNC6_wDD_sims$SNC90_rand_std <- (tmp_SNC6_wDD_sims$SNC90_rand - mean(tmp_SNC6_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC6_wDD_sims$SNC90_rand))
+tmp_SNC6_wDD_sims$SNC15_group_std <- (tmp_SNC6_wDD_sims$SNC15_group - mean(tmp_SNC6_wDD_sims$SNC15_group))/(2*sd(tmp_SNC6_wDD_sims$SNC15_group))
+tmp_SNC6_wDD_sims$SNC20_group_std <- (tmp_SNC6_wDD_sims$SNC20_group - mean(tmp_SNC6_wDD_sims$SNC20_group))/(2*sd(tmp_SNC6_wDD_sims$SNC20_group))
+tmp_SNC6_wDD_sims$SNC30_group_std <- (tmp_SNC6_wDD_sims$SNC30_group - mean(tmp_SNC6_wDD_sims$SNC30_group))/(2*sd(tmp_SNC6_wDD_sims$SNC30_group))
+tmp_SNC6_wDD_sims$SNC40_group_std <- (tmp_SNC6_wDD_sims$SNC40_group - mean(tmp_SNC6_wDD_sims$SNC40_group))/(2*sd(tmp_SNC6_wDD_sims$SNC40_group))
+tmp_SNC6_wDD_sims$SNC50_group_std <- (tmp_SNC6_wDD_sims$SNC50_group - mean(tmp_SNC6_wDD_sims$SNC50_group))/(2*sd(tmp_SNC6_wDD_sims$SNC50_group))
+tmp_SNC6_wDD_sims$SNC60_group_std <- (tmp_SNC6_wDD_sims$SNC60_group - mean(tmp_SNC6_wDD_sims$SNC60_group))/(2*sd(tmp_SNC6_wDD_sims$SNC60_group))
+tmp_SNC6_wDD_sims$SNC70_group_std <- (tmp_SNC6_wDD_sims$SNC70_group - mean(tmp_SNC6_wDD_sims$SNC70_group))/(2*sd(tmp_SNC6_wDD_sims$SNC70_group))
+tmp_SNC6_wDD_sims$SNC80_group_std <- (tmp_SNC6_wDD_sims$SNC80_group - mean(tmp_SNC6_wDD_sims$SNC80_group))/(2*sd(tmp_SNC6_wDD_sims$SNC80_group))
+tmp_SNC6_wDD_sims$SNC90_group_std <- (tmp_SNC6_wDD_sims$SNC90_group - mean(tmp_SNC6_wDD_sims$SNC90_group))/(2*sd(tmp_SNC6_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC6.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim6LDrand_df<-tidy(modSNC6.LDrand, conf.int = TRUE, effects = "fixed")
+sim6LDrand_df$model <- "Sim 6"
+sim6LDrand_df$Percent <- "0"
+sim6LDrand_df$Rand <- "rand"
+
+modSNC6.LDgroup_df<-tidy(modSNC6.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC6.LDgroup_df$model <- "Sim 6"
+modSNC6.LDgroup_df$Percent <- "0"
+modSNC6.LDgroup_df$Rand <- "Group"
+
+
+sim6LD15rand_df<-tidy(modSNC6.LD15rand, conf.int = TRUE, effects = "fixed")
+sim6LD15rand_df$model <- "Sim 6"
+sim6LD15rand_df$Percent <- "15"
+sim6LD15rand_df$Rand <- "rand"
+
+sim6LD20rand_df<-tidy(modSNC6.LD20rand, conf.int = TRUE, effects = "fixed")
+sim6LD20rand_df$model <- "Sim 6"
+sim6LD20rand_df$Percent <- "20"
+sim6LD20rand_df$Rand <- "rand"
+
+sim6LD30rand_df<-tidy(modSNC6.LD30rand, conf.int = TRUE, effects = "fixed")
+sim6LD30rand_df$model <- "Sim 6"
+sim6LD30rand_df$Percent <- "30"
+sim6LD30rand_df$Rand <- "rand"
+
+sim6LD40rand_df<-tidy(modSNC6.LD40rand, conf.int = TRUE, effects = "fixed")
+sim6LD40rand_df$model <- "Sim 6"
+sim6LD40rand_df$Percent <- "40"
+sim6LD40rand_df$Rand <- "rand"
+
+sim6LD50rand_df<-tidy(modSNC6.LD50rand, conf.int = TRUE, effects = "fixed")
+sim6LD50rand_df$model <- "Sim 6"
+sim6LD50rand_df$Percent <- "50"
+sim6LD50rand_df$Rand <- "rand"
+
+sim6LD60rand_df<-tidy(modSNC6.LD60rand, conf.int = TRUE, effects = "fixed")
+sim6LD60rand_df$model <- "Sim 6"
+sim6LD60rand_df$Percent <- "60"
+sim6LD60rand_df$Rand <- "rand"
+
+sim6LD70rand_df<-tidy(modSNC6.LD70rand, conf.int = TRUE, effects = "fixed")
+sim6LD70rand_df$model <- "Sim 6"
+sim6LD70rand_df$Percent <- "70"
+sim6LD70rand_df$Rand <- "rand"
+
+sim6LD80rand_df<-tidy(modSNC6.LD80rand, conf.int = TRUE, effects = "fixed")
+sim6LD80rand_df$model <- "Sim 6"
+sim6LD80rand_df$Percent <- "80"
+sim6LD80rand_df$Rand <- "rand"
+
+sim6LD90rand_df<-tidy(modSNC6.LD90rand, conf.int = TRUE, effects = "fixed")
+sim6LD90rand_df$model <- "Sim 6"
+sim6LD90rand_df$Percent <- "90"
+sim6LD90rand_df$Rand <- "rand"
+
+sim6LD15group_df<-tidy(modSNC6.LD15group, conf.int = TRUE, effects = "fixed")
+sim6LD15group_df$model <- "Sim 6"
+sim6LD15group_df$Percent <- "15"
+sim6LD15group_df$Rand <- "Group"
+
+sim6LD20group_df<-tidy(modSNC6.LD20group, conf.int = TRUE, effects = "fixed")
+sim6LD20group_df$model <- "Sim 6"
+sim6LD20group_df$Percent <- "20"
+sim6LD20group_df$Rand <- "Group"
+
+sim6LD30group_df<-tidy(modSNC6.LD30group, conf.int = TRUE, effects = "fixed")
+sim6LD30group_df$model <- "Sim 6"
+sim6LD30group_df$Percent <- "30"
+sim6LD30group_df$Rand <- "Group"
+
+sim6LD40group_df<-tidy(modSNC6.LD40group, conf.int = TRUE, effects = "fixed")
+sim6LD40group_df$model <- "Sim 6"
+sim6LD40group_df$Percent <- "40"
+sim6LD40group_df$Rand <- "Group"
+
+sim6LD50group_df<-tidy(modSNC6.LD50group, conf.int = TRUE, effects = "fixed")
+sim6LD50group_df$model <- "Sim 6"
+sim6LD50group_df$Percent <- "50"
+sim6LD50group_df$Rand <- "Group"
+
+sim6LD60group_df<-tidy(modSNC6.LD60group, conf.int = TRUE, effects = "fixed")
+sim6LD60group_df$model <- "Sim 6"
+sim6LD60group_df$Percent <- "60"
+sim6LD60group_df$Rand <- "Group"
+
+sim6LD70group_df<-tidy(modSNC6.LD70group, conf.int = TRUE, effects = "fixed")
+sim6LD70group_df$model <- "Sim 6"
+sim6LD70group_df$Percent <- "70"
+sim6LD70group_df$Rand <- "Group"
+
+sim6LD80group_df<-tidy(modSNC6.LD80group, conf.int = TRUE, effects = "fixed")
+sim6LD80group_df$model <- "Sim 6"
+sim6LD80group_df$Percent <- "80"
+sim6LD80group_df$Rand <- "Group"
+
+sim6LD90group_df<-tidy(modSNC6.LD90group, conf.int = TRUE, effects = "fixed")
+sim6LD90group_df$model <- "Sim 6"
+sim6LD90group_df$Percent <- "90"
+sim6LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 7
+```{r,echo=FALSE}
+set.seed(46)
+tmp_SNC7_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC7_wDD$Unique_ID <- seq_len(nrow(tmp_SNC7_wDD))
+
+SNC_DD7only <- tmp_SNC7_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD7only[sample(nrow(SNC_DD7only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD7only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC7_wDD_sims <- left_join(tmp_SNC7_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC7_wDD_sims$TD_dist_std <- (tmp_SNC7_wDD_sims$TD_dist - mean(tmp_SNC7_wDD_sims$TD_dist))/(2*sd(tmp_SNC7_wDD_sims$TD_dist))
+tmp_SNC7_wDD_sims$SNC_NS_15_std <- (tmp_SNC7_wDD_sims$SNC_NS_15 - mean(tmp_SNC7_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC7_wDD_sims$SNC_NS_15))
+tmp_SNC7_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC7_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC7_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC7_wDD_sims$SNC_sim_05_25))
+tmp_SNC7_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC7_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC7_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC7_wDD_sims$SNC_sim_group_no03))
+tmp_SNC7_wDD_sims$SNC15_rand_std <- (tmp_SNC7_wDD_sims$SNC15_rand - mean(tmp_SNC7_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC15_rand))
+tmp_SNC7_wDD_sims$SNC20_rand_std <- (tmp_SNC7_wDD_sims$SNC20_rand - mean(tmp_SNC7_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC20_rand))
+tmp_SNC7_wDD_sims$SNC30_rand_std <- (tmp_SNC7_wDD_sims$SNC30_rand - mean(tmp_SNC7_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC30_rand))
+tmp_SNC7_wDD_sims$SNC40_rand_std <- (tmp_SNC7_wDD_sims$SNC40_rand - mean(tmp_SNC7_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC40_rand))
+tmp_SNC7_wDD_sims$SNC50_rand_std <- (tmp_SNC7_wDD_sims$SNC50_rand - mean(tmp_SNC7_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC50_rand))
+tmp_SNC7_wDD_sims$SNC60_rand_std <- (tmp_SNC7_wDD_sims$SNC60_rand - mean(tmp_SNC7_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC60_rand))
+tmp_SNC7_wDD_sims$SNC70_rand_std <- (tmp_SNC7_wDD_sims$SNC70_rand - mean(tmp_SNC7_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC70_rand))
+tmp_SNC7_wDD_sims$SNC80_rand_std <- (tmp_SNC7_wDD_sims$SNC80_rand - mean(tmp_SNC7_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC80_rand))
+tmp_SNC7_wDD_sims$SNC90_rand_std <- (tmp_SNC7_wDD_sims$SNC90_rand - mean(tmp_SNC7_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC7_wDD_sims$SNC90_rand))
+tmp_SNC7_wDD_sims$SNC15_group_std <- (tmp_SNC7_wDD_sims$SNC15_group - mean(tmp_SNC7_wDD_sims$SNC15_group))/(2*sd(tmp_SNC7_wDD_sims$SNC15_group))
+tmp_SNC7_wDD_sims$SNC20_group_std <- (tmp_SNC7_wDD_sims$SNC20_group - mean(tmp_SNC7_wDD_sims$SNC20_group))/(2*sd(tmp_SNC7_wDD_sims$SNC20_group))
+tmp_SNC7_wDD_sims$SNC30_group_std <- (tmp_SNC7_wDD_sims$SNC30_group - mean(tmp_SNC7_wDD_sims$SNC30_group))/(2*sd(tmp_SNC7_wDD_sims$SNC30_group))
+tmp_SNC7_wDD_sims$SNC40_group_std <- (tmp_SNC7_wDD_sims$SNC40_group - mean(tmp_SNC7_wDD_sims$SNC40_group))/(2*sd(tmp_SNC7_wDD_sims$SNC40_group))
+tmp_SNC7_wDD_sims$SNC50_group_std <- (tmp_SNC7_wDD_sims$SNC50_group - mean(tmp_SNC7_wDD_sims$SNC50_group))/(2*sd(tmp_SNC7_wDD_sims$SNC50_group))
+tmp_SNC7_wDD_sims$SNC60_group_std <- (tmp_SNC7_wDD_sims$SNC60_group - mean(tmp_SNC7_wDD_sims$SNC60_group))/(2*sd(tmp_SNC7_wDD_sims$SNC60_group))
+tmp_SNC7_wDD_sims$SNC70_group_std <- (tmp_SNC7_wDD_sims$SNC70_group - mean(tmp_SNC7_wDD_sims$SNC70_group))/(2*sd(tmp_SNC7_wDD_sims$SNC70_group))
+tmp_SNC7_wDD_sims$SNC80_group_std <- (tmp_SNC7_wDD_sims$SNC80_group - mean(tmp_SNC7_wDD_sims$SNC80_group))/(2*sd(tmp_SNC7_wDD_sims$SNC80_group))
+tmp_SNC7_wDD_sims$SNC90_group_std <- (tmp_SNC7_wDD_sims$SNC90_group - mean(tmp_SNC7_wDD_sims$SNC90_group))/(2*sd(tmp_SNC7_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC7.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim7LDrand_df<-tidy(modSNC7.LDrand, conf.int = TRUE, effects = "fixed")
+sim7LDrand_df$model <- "Sim 7"
+sim7LDrand_df$Percent <- "0"
+sim7LDrand_df$Rand <- "rand"
+
+modSNC7.LDgroup_df<-tidy(modSNC7.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC7.LDgroup_df$model <- "Sim 7"
+modSNC7.LDgroup_df$Percent <- "0"
+modSNC7.LDgroup_df$Rand <- "Group"
+
+
+sim7LD15rand_df<-tidy(modSNC7.LD15rand, conf.int = TRUE, effects = "fixed")
+sim7LD15rand_df$model <- "Sim 7"
+sim7LD15rand_df$Percent <- "15"
+sim7LD15rand_df$Rand <- "rand"
+
+sim7LD20rand_df<-tidy(modSNC7.LD20rand, conf.int = TRUE, effects = "fixed")
+sim7LD20rand_df$model <- "Sim 7"
+sim7LD20rand_df$Percent <- "20"
+sim7LD20rand_df$Rand <- "rand"
+
+sim7LD30rand_df<-tidy(modSNC7.LD30rand, conf.int = TRUE, effects = "fixed")
+sim7LD30rand_df$model <- "Sim 7"
+sim7LD30rand_df$Percent <- "30"
+sim7LD30rand_df$Rand <- "rand"
+
+sim7LD40rand_df<-tidy(modSNC7.LD40rand, conf.int = TRUE, effects = "fixed")
+sim7LD40rand_df$model <- "Sim 7"
+sim7LD40rand_df$Percent <- "40"
+sim7LD40rand_df$Rand <- "rand"
+
+sim7LD50rand_df<-tidy(modSNC7.LD50rand, conf.int = TRUE, effects = "fixed")
+sim7LD50rand_df$model <- "Sim 7"
+sim7LD50rand_df$Percent <- "50"
+sim7LD50rand_df$Rand <- "rand"
+
+sim7LD60rand_df<-tidy(modSNC7.LD60rand, conf.int = TRUE, effects = "fixed")
+sim7LD60rand_df$model <- "Sim 7"
+sim7LD60rand_df$Percent <- "60"
+sim7LD60rand_df$Rand <- "rand"
+
+sim7LD70rand_df<-tidy(modSNC7.LD70rand, conf.int = TRUE, effects = "fixed")
+sim7LD70rand_df$model <- "Sim 7"
+sim7LD70rand_df$Percent <- "70"
+sim7LD70rand_df$Rand <- "rand"
+
+sim7LD80rand_df<-tidy(modSNC7.LD80rand, conf.int = TRUE, effects = "fixed")
+sim7LD80rand_df$model <- "Sim 7"
+sim7LD80rand_df$Percent <- "80"
+sim7LD80rand_df$Rand <- "rand"
+
+sim7LD90rand_df<-tidy(modSNC7.LD90rand, conf.int = TRUE, effects = "fixed")
+sim7LD90rand_df$model <- "Sim 7"
+sim7LD90rand_df$Percent <- "90"
+sim7LD90rand_df$Rand <- "rand"
+
+sim7LD15group_df<-tidy(modSNC7.LD15group, conf.int = TRUE, effects = "fixed")
+sim7LD15group_df$model <- "Sim 7"
+sim7LD15group_df$Percent <- "15"
+sim7LD15group_df$Rand <- "Group"
+
+sim7LD20group_df<-tidy(modSNC7.LD20group, conf.int = TRUE, effects = "fixed")
+sim7LD20group_df$model <- "Sim 7"
+sim7LD20group_df$Percent <- "20"
+sim7LD20group_df$Rand <- "Group"
+
+sim7LD30group_df<-tidy(modSNC7.LD30group, conf.int = TRUE, effects = "fixed")
+sim7LD30group_df$model <- "Sim 7"
+sim7LD30group_df$Percent <- "30"
+sim7LD30group_df$Rand <- "Group"
+
+sim7LD40group_df<-tidy(modSNC7.LD40group, conf.int = TRUE, effects = "fixed")
+sim7LD40group_df$model <- "Sim 7"
+sim7LD40group_df$Percent <- "40"
+sim7LD40group_df$Rand <- "Group"
+
+sim7LD50group_df<-tidy(modSNC7.LD50group, conf.int = TRUE, effects = "fixed")
+sim7LD50group_df$model <- "Sim 7"
+sim7LD50group_df$Percent <- "50"
+sim7LD50group_df$Rand <- "Group"
+
+sim7LD60group_df<-tidy(modSNC7.LD60group, conf.int = TRUE, effects = "fixed")
+sim7LD60group_df$model <- "Sim 7"
+sim7LD60group_df$Percent <- "60"
+sim7LD60group_df$Rand <- "Group"
+
+sim7LD70group_df<-tidy(modSNC7.LD70group, conf.int = TRUE, effects = "fixed")
+sim7LD70group_df$model <- "Sim 7"
+sim7LD70group_df$Percent <- "70"
+sim7LD70group_df$Rand <- "Group"
+
+sim7LD80group_df<-tidy(modSNC7.LD80group, conf.int = TRUE, effects = "fixed")
+sim7LD80group_df$model <- "Sim 7"
+sim7LD80group_df$Percent <- "80"
+sim7LD80group_df$Rand <- "Group"
+
+sim7LD90group_df<-tidy(modSNC7.LD90group, conf.int = TRUE, effects = "fixed")
+sim7LD90group_df$model <- "Sim 7"
+sim7LD90group_df$Percent <- "90"
+sim7LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 8
+```{r,echo=FALSE}
+set.seed(3)
+tmp_SNC8_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC8_wDD$Unique_ID <- seq_len(nrow(tmp_SNC8_wDD))
+
+SNC_DD8only <- tmp_SNC8_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD8only[sample(nrow(SNC_DD8only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD8only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC8_wDD_sims <- left_join(tmp_SNC8_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC8_wDD_sims$TD_dist_std <- (tmp_SNC8_wDD_sims$TD_dist - mean(tmp_SNC8_wDD_sims$TD_dist))/(2*sd(tmp_SNC8_wDD_sims$TD_dist))
+tmp_SNC8_wDD_sims$SNC_NS_15_std <- (tmp_SNC8_wDD_sims$SNC_NS_15 - mean(tmp_SNC8_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC8_wDD_sims$SNC_NS_15))
+tmp_SNC8_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC8_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC8_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC8_wDD_sims$SNC_sim_05_25))
+tmp_SNC8_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC8_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC8_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC8_wDD_sims$SNC_sim_group_no03))
+tmp_SNC8_wDD_sims$SNC15_rand_std <- (tmp_SNC8_wDD_sims$SNC15_rand - mean(tmp_SNC8_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC15_rand))
+tmp_SNC8_wDD_sims$SNC20_rand_std <- (tmp_SNC8_wDD_sims$SNC20_rand - mean(tmp_SNC8_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC20_rand))
+tmp_SNC8_wDD_sims$SNC30_rand_std <- (tmp_SNC8_wDD_sims$SNC30_rand - mean(tmp_SNC8_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC30_rand))
+tmp_SNC8_wDD_sims$SNC40_rand_std <- (tmp_SNC8_wDD_sims$SNC40_rand - mean(tmp_SNC8_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC40_rand))
+tmp_SNC8_wDD_sims$SNC50_rand_std <- (tmp_SNC8_wDD_sims$SNC50_rand - mean(tmp_SNC8_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC50_rand))
+tmp_SNC8_wDD_sims$SNC60_rand_std <- (tmp_SNC8_wDD_sims$SNC60_rand - mean(tmp_SNC8_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC60_rand))
+tmp_SNC8_wDD_sims$SNC70_rand_std <- (tmp_SNC8_wDD_sims$SNC70_rand - mean(tmp_SNC8_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC70_rand))
+tmp_SNC8_wDD_sims$SNC80_rand_std <- (tmp_SNC8_wDD_sims$SNC80_rand - mean(tmp_SNC8_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC80_rand))
+tmp_SNC8_wDD_sims$SNC90_rand_std <- (tmp_SNC8_wDD_sims$SNC90_rand - mean(tmp_SNC8_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC8_wDD_sims$SNC90_rand))
+tmp_SNC8_wDD_sims$SNC15_group_std <- (tmp_SNC8_wDD_sims$SNC15_group - mean(tmp_SNC8_wDD_sims$SNC15_group))/(2*sd(tmp_SNC8_wDD_sims$SNC15_group))
+tmp_SNC8_wDD_sims$SNC20_group_std <- (tmp_SNC8_wDD_sims$SNC20_group - mean(tmp_SNC8_wDD_sims$SNC20_group))/(2*sd(tmp_SNC8_wDD_sims$SNC20_group))
+tmp_SNC8_wDD_sims$SNC30_group_std <- (tmp_SNC8_wDD_sims$SNC30_group - mean(tmp_SNC8_wDD_sims$SNC30_group))/(2*sd(tmp_SNC8_wDD_sims$SNC30_group))
+tmp_SNC8_wDD_sims$SNC40_group_std <- (tmp_SNC8_wDD_sims$SNC40_group - mean(tmp_SNC8_wDD_sims$SNC40_group))/(2*sd(tmp_SNC8_wDD_sims$SNC40_group))
+tmp_SNC8_wDD_sims$SNC50_group_std <- (tmp_SNC8_wDD_sims$SNC50_group - mean(tmp_SNC8_wDD_sims$SNC50_group))/(2*sd(tmp_SNC8_wDD_sims$SNC50_group))
+tmp_SNC8_wDD_sims$SNC60_group_std <- (tmp_SNC8_wDD_sims$SNC60_group - mean(tmp_SNC8_wDD_sims$SNC60_group))/(2*sd(tmp_SNC8_wDD_sims$SNC60_group))
+tmp_SNC8_wDD_sims$SNC70_group_std <- (tmp_SNC8_wDD_sims$SNC70_group - mean(tmp_SNC8_wDD_sims$SNC70_group))/(2*sd(tmp_SNC8_wDD_sims$SNC70_group))
+tmp_SNC8_wDD_sims$SNC80_group_std <- (tmp_SNC8_wDD_sims$SNC80_group - mean(tmp_SNC8_wDD_sims$SNC80_group))/(2*sd(tmp_SNC8_wDD_sims$SNC80_group))
+tmp_SNC8_wDD_sims$SNC90_group_std <- (tmp_SNC8_wDD_sims$SNC90_group - mean(tmp_SNC8_wDD_sims$SNC90_group))/(2*sd(tmp_SNC8_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC8.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim8LDrand_df<-tidy(modSNC8.LDrand, conf.int = TRUE, effects = "fixed")
+sim8LDrand_df$model <- "Sim 8"
+sim8LDrand_df$Percent <- "0"
+sim8LDrand_df$Rand <- "rand"
+
+modSNC8.LDgroup_df<-tidy(modSNC8.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC8.LDgroup_df$model <- "Sim 8"
+modSNC8.LDgroup_df$Percent <- "0"
+modSNC8.LDgroup_df$Rand <- "Group"
+
+
+sim8LD15rand_df<-tidy(modSNC8.LD15rand, conf.int = TRUE, effects = "fixed")
+sim8LD15rand_df$model <- "Sim 8"
+sim8LD15rand_df$Percent <- "15"
+sim8LD15rand_df$Rand <- "rand"
+
+sim8LD20rand_df<-tidy(modSNC8.LD20rand, conf.int = TRUE, effects = "fixed")
+sim8LD20rand_df$model <- "Sim 8"
+sim8LD20rand_df$Percent <- "20"
+sim8LD20rand_df$Rand <- "rand"
+
+sim8LD30rand_df<-tidy(modSNC8.LD30rand, conf.int = TRUE, effects = "fixed")
+sim8LD30rand_df$model <- "Sim 8"
+sim8LD30rand_df$Percent <- "30"
+sim8LD30rand_df$Rand <- "rand"
+
+sim8LD40rand_df<-tidy(modSNC8.LD40rand, conf.int = TRUE, effects = "fixed")
+sim8LD40rand_df$model <- "Sim 8"
+sim8LD40rand_df$Percent <- "40"
+sim8LD40rand_df$Rand <- "rand"
+
+sim8LD50rand_df<-tidy(modSNC8.LD50rand, conf.int = TRUE, effects = "fixed")
+sim8LD50rand_df$model <- "Sim 8"
+sim8LD50rand_df$Percent <- "50"
+sim8LD50rand_df$Rand <- "rand"
+
+sim8LD60rand_df<-tidy(modSNC8.LD60rand, conf.int = TRUE, effects = "fixed")
+sim8LD60rand_df$model <- "Sim 8"
+sim8LD60rand_df$Percent <- "60"
+sim8LD60rand_df$Rand <- "rand"
+
+sim8LD70rand_df<-tidy(modSNC8.LD70rand, conf.int = TRUE, effects = "fixed")
+sim8LD70rand_df$model <- "Sim 8"
+sim8LD70rand_df$Percent <- "70"
+sim8LD70rand_df$Rand <- "rand"
+
+sim8LD80rand_df<-tidy(modSNC8.LD80rand, conf.int = TRUE, effects = "fixed")
+sim8LD80rand_df$model <- "Sim 8"
+sim8LD80rand_df$Percent <- "80"
+sim8LD80rand_df$Rand <- "rand"
+
+sim8LD90rand_df<-tidy(modSNC8.LD90rand, conf.int = TRUE, effects = "fixed")
+sim8LD90rand_df$model <- "Sim 8"
+sim8LD90rand_df$Percent <- "90"
+sim8LD90rand_df$Rand <- "rand"
+
+sim8LD15group_df<-tidy(modSNC8.LD15group, conf.int = TRUE, effects = "fixed")
+sim8LD15group_df$model <- "Sim 8"
+sim8LD15group_df$Percent <- "15"
+sim8LD15group_df$Rand <- "Group"
+
+sim8LD20group_df<-tidy(modSNC8.LD20group, conf.int = TRUE, effects = "fixed")
+sim8LD20group_df$model <- "Sim 8"
+sim8LD20group_df$Percent <- "20"
+sim8LD20group_df$Rand <- "Group"
+
+sim8LD30group_df<-tidy(modSNC8.LD30group, conf.int = TRUE, effects = "fixed")
+sim8LD30group_df$model <- "Sim 8"
+sim8LD30group_df$Percent <- "30"
+sim8LD30group_df$Rand <- "Group"
+
+sim8LD40group_df<-tidy(modSNC8.LD40group, conf.int = TRUE, effects = "fixed")
+sim8LD40group_df$model <- "Sim 8"
+sim8LD40group_df$Percent <- "40"
+sim8LD40group_df$Rand <- "Group"
+
+sim8LD50group_df<-tidy(modSNC8.LD50group, conf.int = TRUE, effects = "fixed")
+sim8LD50group_df$model <- "Sim 8"
+sim8LD50group_df$Percent <- "50"
+sim8LD50group_df$Rand <- "Group"
+
+sim8LD60group_df<-tidy(modSNC8.LD60group, conf.int = TRUE, effects = "fixed")
+sim8LD60group_df$model <- "Sim 8"
+sim8LD60group_df$Percent <- "60"
+sim8LD60group_df$Rand <- "Group"
+
+sim8LD70group_df<-tidy(modSNC8.LD70group, conf.int = TRUE, effects = "fixed")
+sim8LD70group_df$model <- "Sim 8"
+sim8LD70group_df$Percent <- "70"
+sim8LD70group_df$Rand <- "Group"
+
+sim8LD80group_df<-tidy(modSNC8.LD80group, conf.int = TRUE, effects = "fixed")
+sim8LD80group_df$model <- "Sim 8"
+sim8LD80group_df$Percent <- "80"
+sim8LD80group_df$Rand <- "Group"
+
+sim8LD90group_df<-tidy(modSNC8.LD90group, conf.int = TRUE, effects = "fixed")
+sim8LD90group_df$model <- "Sim 8"
+sim8LD90group_df$Percent <- "90"
+sim8LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 9
+```{r,echo=FALSE}
+set.seed(31)
+tmp_SNC9_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC9_wDD$Unique_ID <- seq_len(nrow(tmp_SNC9_wDD))
+
+SNC_DD9only <- tmp_SNC9_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD9only[sample(nrow(SNC_DD9only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD9only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC9_wDD_sims <- left_join(tmp_SNC9_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC9_wDD_sims$TD_dist_std <- (tmp_SNC9_wDD_sims$TD_dist - mean(tmp_SNC9_wDD_sims$TD_dist))/(2*sd(tmp_SNC9_wDD_sims$TD_dist))
+tmp_SNC9_wDD_sims$SNC_NS_15_std <- (tmp_SNC9_wDD_sims$SNC_NS_15 - mean(tmp_SNC9_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC9_wDD_sims$SNC_NS_15))
+tmp_SNC9_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC9_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC9_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC9_wDD_sims$SNC_sim_05_25))
+tmp_SNC9_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC9_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC9_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC9_wDD_sims$SNC_sim_group_no03))
+tmp_SNC9_wDD_sims$SNC15_rand_std <- (tmp_SNC9_wDD_sims$SNC15_rand - mean(tmp_SNC9_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC15_rand))
+tmp_SNC9_wDD_sims$SNC20_rand_std <- (tmp_SNC9_wDD_sims$SNC20_rand - mean(tmp_SNC9_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC20_rand))
+tmp_SNC9_wDD_sims$SNC30_rand_std <- (tmp_SNC9_wDD_sims$SNC30_rand - mean(tmp_SNC9_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC30_rand))
+tmp_SNC9_wDD_sims$SNC40_rand_std <- (tmp_SNC9_wDD_sims$SNC40_rand - mean(tmp_SNC9_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC40_rand))
+tmp_SNC9_wDD_sims$SNC50_rand_std <- (tmp_SNC9_wDD_sims$SNC50_rand - mean(tmp_SNC9_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC50_rand))
+tmp_SNC9_wDD_sims$SNC60_rand_std <- (tmp_SNC9_wDD_sims$SNC60_rand - mean(tmp_SNC9_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC60_rand))
+tmp_SNC9_wDD_sims$SNC70_rand_std <- (tmp_SNC9_wDD_sims$SNC70_rand - mean(tmp_SNC9_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC70_rand))
+tmp_SNC9_wDD_sims$SNC80_rand_std <- (tmp_SNC9_wDD_sims$SNC80_rand - mean(tmp_SNC9_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC80_rand))
+tmp_SNC9_wDD_sims$SNC90_rand_std <- (tmp_SNC9_wDD_sims$SNC90_rand - mean(tmp_SNC9_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC9_wDD_sims$SNC90_rand))
+tmp_SNC9_wDD_sims$SNC15_group_std <- (tmp_SNC9_wDD_sims$SNC15_group - mean(tmp_SNC9_wDD_sims$SNC15_group))/(2*sd(tmp_SNC9_wDD_sims$SNC15_group))
+tmp_SNC9_wDD_sims$SNC20_group_std <- (tmp_SNC9_wDD_sims$SNC20_group - mean(tmp_SNC9_wDD_sims$SNC20_group))/(2*sd(tmp_SNC9_wDD_sims$SNC20_group))
+tmp_SNC9_wDD_sims$SNC30_group_std <- (tmp_SNC9_wDD_sims$SNC30_group - mean(tmp_SNC9_wDD_sims$SNC30_group))/(2*sd(tmp_SNC9_wDD_sims$SNC30_group))
+tmp_SNC9_wDD_sims$SNC40_group_std <- (tmp_SNC9_wDD_sims$SNC40_group - mean(tmp_SNC9_wDD_sims$SNC40_group))/(2*sd(tmp_SNC9_wDD_sims$SNC40_group))
+tmp_SNC9_wDD_sims$SNC50_group_std <- (tmp_SNC9_wDD_sims$SNC50_group - mean(tmp_SNC9_wDD_sims$SNC50_group))/(2*sd(tmp_SNC9_wDD_sims$SNC50_group))
+tmp_SNC9_wDD_sims$SNC60_group_std <- (tmp_SNC9_wDD_sims$SNC60_group - mean(tmp_SNC9_wDD_sims$SNC60_group))/(2*sd(tmp_SNC9_wDD_sims$SNC60_group))
+tmp_SNC9_wDD_sims$SNC70_group_std <- (tmp_SNC9_wDD_sims$SNC70_group - mean(tmp_SNC9_wDD_sims$SNC70_group))/(2*sd(tmp_SNC9_wDD_sims$SNC70_group))
+tmp_SNC9_wDD_sims$SNC80_group_std <- (tmp_SNC9_wDD_sims$SNC80_group - mean(tmp_SNC9_wDD_sims$SNC80_group))/(2*sd(tmp_SNC9_wDD_sims$SNC80_group))
+tmp_SNC9_wDD_sims$SNC90_group_std <- (tmp_SNC9_wDD_sims$SNC90_group - mean(tmp_SNC9_wDD_sims$SNC90_group))/(2*sd(tmp_SNC9_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC9.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim9LDrand_df<-tidy(modSNC9.LDrand, conf.int = TRUE, effects = "fixed")
+sim9LDrand_df$model <- "Sim 9"
+sim9LDrand_df$Percent <- "0"
+sim9LDrand_df$Rand <- "rand"
+
+modSNC9.LDgroup_df<-tidy(modSNC9.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC9.LDgroup_df$model <- "Sim 9"
+modSNC9.LDgroup_df$Percent <- "0"
+modSNC9.LDgroup_df$Rand <- "Group"
+
+
+sim9LD15rand_df<-tidy(modSNC9.LD15rand, conf.int = TRUE, effects = "fixed")
+sim9LD15rand_df$model <- "Sim 9"
+sim9LD15rand_df$Percent <- "15"
+sim9LD15rand_df$Rand <- "rand"
+
+sim9LD20rand_df<-tidy(modSNC9.LD20rand, conf.int = TRUE, effects = "fixed")
+sim9LD20rand_df$model <- "Sim 9"
+sim9LD20rand_df$Percent <- "20"
+sim9LD20rand_df$Rand <- "rand"
+
+sim9LD30rand_df<-tidy(modSNC9.LD30rand, conf.int = TRUE, effects = "fixed")
+sim9LD30rand_df$model <- "Sim 9"
+sim9LD30rand_df$Percent <- "30"
+sim9LD30rand_df$Rand <- "rand"
+
+sim9LD40rand_df<-tidy(modSNC9.LD40rand, conf.int = TRUE, effects = "fixed")
+sim9LD40rand_df$model <- "Sim 9"
+sim9LD40rand_df$Percent <- "40"
+sim9LD40rand_df$Rand <- "rand"
+
+sim9LD50rand_df<-tidy(modSNC9.LD50rand, conf.int = TRUE, effects = "fixed")
+sim9LD50rand_df$model <- "Sim 9"
+sim9LD50rand_df$Percent <- "50"
+sim9LD50rand_df$Rand <- "rand"
+
+sim9LD60rand_df<-tidy(modSNC9.LD60rand, conf.int = TRUE, effects = "fixed")
+sim9LD60rand_df$model <- "Sim 9"
+sim9LD60rand_df$Percent <- "60"
+sim9LD60rand_df$Rand <- "rand"
+
+sim9LD70rand_df<-tidy(modSNC9.LD70rand, conf.int = TRUE, effects = "fixed")
+sim9LD70rand_df$model <- "Sim 9"
+sim9LD70rand_df$Percent <- "70"
+sim9LD70rand_df$Rand <- "rand"
+
+sim9LD80rand_df<-tidy(modSNC9.LD80rand, conf.int = TRUE, effects = "fixed")
+sim9LD80rand_df$model <- "Sim 9"
+sim9LD80rand_df$Percent <- "80"
+sim9LD80rand_df$Rand <- "rand"
+
+sim9LD90rand_df<-tidy(modSNC9.LD90rand, conf.int = TRUE, effects = "fixed")
+sim9LD90rand_df$model <- "Sim 9"
+sim9LD90rand_df$Percent <- "90"
+sim9LD90rand_df$Rand <- "rand"
+
+sim9LD15group_df<-tidy(modSNC9.LD15group, conf.int = TRUE, effects = "fixed")
+sim9LD15group_df$model <- "Sim 9"
+sim9LD15group_df$Percent <- "15"
+sim9LD15group_df$Rand <- "Group"
+
+sim9LD20group_df<-tidy(modSNC9.LD20group, conf.int = TRUE, effects = "fixed")
+sim9LD20group_df$model <- "Sim 9"
+sim9LD20group_df$Percent <- "20"
+sim9LD20group_df$Rand <- "Group"
+
+sim9LD30group_df<-tidy(modSNC9.LD30group, conf.int = TRUE, effects = "fixed")
+sim9LD30group_df$model <- "Sim 9"
+sim9LD30group_df$Percent <- "30"
+sim9LD30group_df$Rand <- "Group"
+
+sim9LD40group_df<-tidy(modSNC9.LD40group, conf.int = TRUE, effects = "fixed")
+sim9LD40group_df$model <- "Sim 9"
+sim9LD40group_df$Percent <- "40"
+sim9LD40group_df$Rand <- "Group"
+
+sim9LD50group_df<-tidy(modSNC9.LD50group, conf.int = TRUE, effects = "fixed")
+sim9LD50group_df$model <- "Sim 9"
+sim9LD50group_df$Percent <- "50"
+sim9LD50group_df$Rand <- "Group"
+
+sim9LD60group_df<-tidy(modSNC9.LD60group, conf.int = TRUE, effects = "fixed")
+sim9LD60group_df$model <- "Sim 9"
+sim9LD60group_df$Percent <- "60"
+sim9LD60group_df$Rand <- "Group"
+
+sim9LD70group_df<-tidy(modSNC9.LD70group, conf.int = TRUE, effects = "fixed")
+sim9LD70group_df$model <- "Sim 9"
+sim9LD70group_df$Percent <- "70"
+sim9LD70group_df$Rand <- "Group"
+
+sim9LD80group_df<-tidy(modSNC9.LD80group, conf.int = TRUE, effects = "fixed")
+sim9LD80group_df$model <- "Sim 9"
+sim9LD80group_df$Percent <- "80"
+sim9LD80group_df$Rand <- "Group"
+
+sim9LD90group_df<-tidy(modSNC9.LD90group, conf.int = TRUE, effects = "fixed")
+sim9LD90group_df$model <- "Sim 9"
+sim9LD90group_df$Percent <- "90"
+sim9LD90group_df$Rand <- "Group"
+```
+
+
+## Sim 10
+```{r,echo=FALSE}
+set.seed(79)
+tmp_SNC10_wDD<-data_cond %>% filter(!is.na(SNC_sim_0)) %>% 
+  filter(SITE_NAME != "StoneNursery") %>% filter(SITE_NAME != "EvansCreek") %>% filter(Rhab_NS_15<2.1|is.na(Rhab_NS_15))%>%
+  filter(NeedRet_yrs_15 >1|is.na(NeedRet_yrs_15)) %>%
+  mutate(SNC_subset_values = list(c(0.5,1,1.5,2,2.5)),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_05_25 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC) %>%
+  
+    group_by(SITE_NAME,REGION) %>%
+  mutate(SNC_subset_values = list(SNC_NS_15[!is.na(SNC_NS_15)& SNC_NS_15>0&SNC_NS_15<3]),
+    # Randomly assign - with replacement - from subset 
+    new_SNC = ifelse(
+      lengths(SNC_subset_values) > 0,
+      sample(unlist(SNC_subset_values), size = n(), replace = TRUE),NA  )) %>%
+  select(-SNC_subset_values) %>%  ungroup() %>%
+  # final step - new value is only used for trees that were dead in 2015
+  mutate(SNC_sim_group_no03 = if_else(is.na(DD), SNC_NS_15, new_SNC)) %>%select(-new_SNC)
+  
+tmp_SNC10_wDD$Unique_ID <- seq_len(nrow(tmp_SNC10_wDD))
+
+SNC_DD10only <- tmp_SNC10_wDD %>% filter(!is.na(DD)) %>% ungroup() %>%dplyr::select("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03") #219 trees
+
+#15% - 33 trees
+SNCrand_15 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=33), ] %>% mutate(SNC_15 = 3)
+
+#20% - 44 trees
+SNCrand_20 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=44), ] %>% mutate(SNC_20 = 3)
+
+#30% - 66 trees
+SNCrand_30 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=66), ] %>% mutate(SNC_30 = 3)
+
+#40% - 88 trees
+SNCrand_40 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=88), ] %>% mutate(SNC_40 = 3)
+
+#50% - 110 trees
+SNCrand_50 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=110), ] %>% mutate(SNC_50 = 3)
+
+#60% - 131 trees
+SNCrand_60 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=131), ] %>% mutate(SNC_60 = 3)
+
+#70% - 153 trees
+SNCrand_70 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=153), ] %>% mutate(SNC_70 = 3)
+
+#80% - 175 trees
+SNCrand_80 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=175), ] %>% mutate(SNC_80 = 3)
+
+#90% - 197 trees
+SNCrand_90 <- SNC_DD10only[sample(nrow(SNC_DD10only), size=197), ] %>% mutate(SNC_90 = 3)
+
+SNC_sensDD_join <- left_join(SNC_DD10only,SNCrand_15, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_20, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_30, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_40, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_50, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_60, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_70, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_80, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  left_join(.,SNCrand_90, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) 
+
+SNC_sensDD_repl <- SNC_sensDD_join %>%
+  mutate(SNC15_rand = if_else(is.na(SNC_15),SNC_sim_05_25, SNC_15))%>%
+  mutate(SNC20_rand = if_else(is.na(SNC_20),SNC_sim_05_25, SNC_20))%>%
+  mutate(SNC30_rand = if_else(is.na(SNC_30),SNC_sim_05_25, SNC_30))%>%
+  mutate(SNC40_rand = if_else(is.na(SNC_40),SNC_sim_05_25, SNC_40))%>%
+  mutate(SNC50_rand = if_else(is.na(SNC_50),SNC_sim_05_25, SNC_50))%>%
+  mutate(SNC60_rand = if_else(is.na(SNC_60),SNC_sim_05_25, SNC_60))%>%
+  mutate(SNC70_rand = if_else(is.na(SNC_70),SNC_sim_05_25, SNC_70))%>%
+  mutate(SNC80_rand = if_else(is.na(SNC_80),SNC_sim_05_25, SNC_80))%>%
+  mutate(SNC90_rand = if_else(is.na(SNC_90),SNC_sim_05_25, SNC_90))%>%
+  
+  mutate(SNC15_group = if_else(is.na(SNC_15),SNC_sim_group_no03, SNC_15))%>%
+  mutate(SNC20_group = if_else(is.na(SNC_20),SNC_sim_group_no03, SNC_20))%>%
+  mutate(SNC30_group = if_else(is.na(SNC_30),SNC_sim_group_no03, SNC_30))%>%
+  mutate(SNC40_group = if_else(is.na(SNC_40),SNC_sim_group_no03, SNC_40))%>%
+  mutate(SNC50_group = if_else(is.na(SNC_50),SNC_sim_group_no03, SNC_50))%>%
+  mutate(SNC60_group = if_else(is.na(SNC_60),SNC_sim_group_no03, SNC_60))%>%
+  mutate(SNC70_group = if_else(is.na(SNC_70),SNC_sim_group_no03, SNC_70))%>%
+  mutate(SNC80_group = if_else(is.na(SNC_80),SNC_sim_group_no03, SNC_80))%>%
+  mutate(SNC90_group = if_else(is.na(SNC_90),SNC_sim_group_no03, SNC_90))
+
+tmp_SNC10_wDD_sims <- left_join(tmp_SNC10_wDD,SNC_sensDD_repl, by=c("Unique_ID","DD","SNC_sim_05_25","SNC_sim_group_no03")) %>%
+  mutate(across(c(SNC15_rand:SNC90_group), ~ ifelse(is.na(.), SNC_NS_15, .)))
+```
+
+### Standardized variables
+```{r, echo=FALSE}
+tmp_SNC10_wDD_sims$TD_dist_std <- (tmp_SNC10_wDD_sims$TD_dist - mean(tmp_SNC10_wDD_sims$TD_dist))/(2*sd(tmp_SNC10_wDD_sims$TD_dist))
+tmp_SNC10_wDD_sims$SNC_NS_15_std <- (tmp_SNC10_wDD_sims$SNC_NS_15 - mean(tmp_SNC10_wDD_sims$SNC_NS_15))/(2*sd(tmp_SNC10_wDD_sims$SNC_NS_15))
+tmp_SNC10_wDD_sims$SNC_sim_05_25_std <- (tmp_SNC10_wDD_sims$SNC_sim_05_25 - mean(tmp_SNC10_wDD_sims$SNC_sim_05_25))/(2*sd(tmp_SNC10_wDD_sims$SNC_sim_05_25))
+tmp_SNC10_wDD_sims$SNC_sim_group_no03_std <- (tmp_SNC10_wDD_sims$SNC_sim_group_no03 - mean(tmp_SNC10_wDD_sims$SNC_sim_group_no03))/(2*sd(tmp_SNC10_wDD_sims$SNC_sim_group_no03))
+tmp_SNC10_wDD_sims$SNC15_rand_std <- (tmp_SNC10_wDD_sims$SNC15_rand - mean(tmp_SNC10_wDD_sims$SNC15_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC15_rand))
+tmp_SNC10_wDD_sims$SNC20_rand_std <- (tmp_SNC10_wDD_sims$SNC20_rand - mean(tmp_SNC10_wDD_sims$SNC20_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC20_rand))
+tmp_SNC10_wDD_sims$SNC30_rand_std <- (tmp_SNC10_wDD_sims$SNC30_rand - mean(tmp_SNC10_wDD_sims$SNC30_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC30_rand))
+tmp_SNC10_wDD_sims$SNC40_rand_std <- (tmp_SNC10_wDD_sims$SNC40_rand - mean(tmp_SNC10_wDD_sims$SNC40_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC40_rand))
+tmp_SNC10_wDD_sims$SNC50_rand_std <- (tmp_SNC10_wDD_sims$SNC50_rand - mean(tmp_SNC10_wDD_sims$SNC50_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC50_rand))
+tmp_SNC10_wDD_sims$SNC60_rand_std <- (tmp_SNC10_wDD_sims$SNC60_rand - mean(tmp_SNC10_wDD_sims$SNC60_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC60_rand))
+tmp_SNC10_wDD_sims$SNC70_rand_std <- (tmp_SNC10_wDD_sims$SNC70_rand - mean(tmp_SNC10_wDD_sims$SNC70_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC70_rand))
+tmp_SNC10_wDD_sims$SNC80_rand_std <- (tmp_SNC10_wDD_sims$SNC80_rand - mean(tmp_SNC10_wDD_sims$SNC80_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC80_rand))
+tmp_SNC10_wDD_sims$SNC90_rand_std <- (tmp_SNC10_wDD_sims$SNC90_rand - mean(tmp_SNC10_wDD_sims$SNC90_rand))/(2*sd(tmp_SNC10_wDD_sims$SNC90_rand))
+tmp_SNC10_wDD_sims$SNC15_group_std <- (tmp_SNC10_wDD_sims$SNC15_group - mean(tmp_SNC10_wDD_sims$SNC15_group))/(2*sd(tmp_SNC10_wDD_sims$SNC15_group))
+tmp_SNC10_wDD_sims$SNC20_group_std <- (tmp_SNC10_wDD_sims$SNC20_group - mean(tmp_SNC10_wDD_sims$SNC20_group))/(2*sd(tmp_SNC10_wDD_sims$SNC20_group))
+tmp_SNC10_wDD_sims$SNC30_group_std <- (tmp_SNC10_wDD_sims$SNC30_group - mean(tmp_SNC10_wDD_sims$SNC30_group))/(2*sd(tmp_SNC10_wDD_sims$SNC30_group))
+tmp_SNC10_wDD_sims$SNC40_group_std <- (tmp_SNC10_wDD_sims$SNC40_group - mean(tmp_SNC10_wDD_sims$SNC40_group))/(2*sd(tmp_SNC10_wDD_sims$SNC40_group))
+tmp_SNC10_wDD_sims$SNC50_group_std <- (tmp_SNC10_wDD_sims$SNC50_group - mean(tmp_SNC10_wDD_sims$SNC50_group))/(2*sd(tmp_SNC10_wDD_sims$SNC50_group))
+tmp_SNC10_wDD_sims$SNC60_group_std <- (tmp_SNC10_wDD_sims$SNC60_group - mean(tmp_SNC10_wDD_sims$SNC60_group))/(2*sd(tmp_SNC10_wDD_sims$SNC60_group))
+tmp_SNC10_wDD_sims$SNC70_group_std <- (tmp_SNC10_wDD_sims$SNC70_group - mean(tmp_SNC10_wDD_sims$SNC70_group))/(2*sd(tmp_SNC10_wDD_sims$SNC70_group))
+tmp_SNC10_wDD_sims$SNC80_group_std <- (tmp_SNC10_wDD_sims$SNC80_group - mean(tmp_SNC10_wDD_sims$SNC80_group))/(2*sd(tmp_SNC10_wDD_sims$SNC80_group))
+tmp_SNC10_wDD_sims$SNC90_group_std <- (tmp_SNC10_wDD_sims$SNC90_group - mean(tmp_SNC10_wDD_sims$SNC90_group))/(2*sd(tmp_SNC10_wDD_sims$SNC90_group))
+```
+
+### Models
+```{r, echo=FALSE}
+modSNC10.LDrand <- glmmTMB(LD ~ SNC_sim_05_25_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LDgroup <- glmmTMB(LD ~ SNC_sim_group_no03_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD15rand <- glmmTMB(LD ~ SNC15_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD20rand <- glmmTMB(LD ~ SNC20_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD30rand <- glmmTMB(LD ~ SNC30_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD40rand <- glmmTMB(LD ~ SNC40_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD50rand <- glmmTMB(LD ~ SNC50_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD60rand <- glmmTMB(LD ~ SNC60_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD70rand <- glmmTMB(LD ~ SNC70_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD80rand <- glmmTMB(LD ~ SNC80_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD90rand <- glmmTMB(LD ~ SNC90_rand_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD15group <- glmmTMB(LD ~ SNC15_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD20group <- glmmTMB(LD ~ SNC20_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD30group <- glmmTMB(LD ~ SNC30_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD40group <- glmmTMB(LD ~ SNC40_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD50group <- glmmTMB(LD ~ SNC50_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD60group <- glmmTMB(LD ~ SNC60_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD70group <- glmmTMB(LD ~ SNC70_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD80group <- glmmTMB(LD ~ SNC80_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+
+modSNC10.LD90group <- glmmTMB(LD ~ SNC90_group_std* TD_dist_std+ I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC10_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Tidy dataframes
+```{r,echo=FALSE}
+sim10LDrand_df<-tidy(modSNC10.LDrand, conf.int = TRUE, effects = "fixed")
+sim10LDrand_df$model <- "Sim 10"
+sim10LDrand_df$Percent <- "0"
+sim10LDrand_df$Rand <- "rand"
+
+modSNC10.LDgroup_df<-tidy(modSNC10.LDgroup, conf.int = TRUE, effects = "fixed")
+modSNC10.LDgroup_df$model <- "Sim 10"
+modSNC10.LDgroup_df$Percent <- "0"
+modSNC10.LDgroup_df$Rand <- "Group"
+
+
+sim10LD15rand_df<-tidy(modSNC10.LD15rand, conf.int = TRUE, effects = "fixed")
+sim10LD15rand_df$model <- "Sim 10"
+sim10LD15rand_df$Percent <- "15"
+sim10LD15rand_df$Rand <- "rand"
+
+sim10LD20rand_df<-tidy(modSNC10.LD20rand, conf.int = TRUE, effects = "fixed")
+sim10LD20rand_df$model <- "Sim 10"
+sim10LD20rand_df$Percent <- "20"
+sim10LD20rand_df$Rand <- "rand"
+
+sim10LD30rand_df<-tidy(modSNC10.LD30rand, conf.int = TRUE, effects = "fixed")
+sim10LD30rand_df$model <- "Sim 10"
+sim10LD30rand_df$Percent <- "30"
+sim10LD30rand_df$Rand <- "rand"
+
+sim10LD40rand_df<-tidy(modSNC10.LD40rand, conf.int = TRUE, effects = "fixed")
+sim10LD40rand_df$model <- "Sim 10"
+sim10LD40rand_df$Percent <- "40"
+sim10LD40rand_df$Rand <- "rand"
+
+sim10LD50rand_df<-tidy(modSNC10.LD50rand, conf.int = TRUE, effects = "fixed")
+sim10LD50rand_df$model <- "Sim 10"
+sim10LD50rand_df$Percent <- "50"
+sim10LD50rand_df$Rand <- "rand"
+
+sim10LD60rand_df<-tidy(modSNC10.LD60rand, conf.int = TRUE, effects = "fixed")
+sim10LD60rand_df$model <- "Sim 10"
+sim10LD60rand_df$Percent <- "60"
+sim10LD60rand_df$Rand <- "rand"
+
+sim10LD70rand_df<-tidy(modSNC10.LD70rand, conf.int = TRUE, effects = "fixed")
+sim10LD70rand_df$model <- "Sim 10"
+sim10LD70rand_df$Percent <- "70"
+sim10LD70rand_df$Rand <- "rand"
+
+sim10LD80rand_df<-tidy(modSNC10.LD80rand, conf.int = TRUE, effects = "fixed")
+sim10LD80rand_df$model <- "Sim 10"
+sim10LD80rand_df$Percent <- "80"
+sim10LD80rand_df$Rand <- "rand"
+
+sim10LD90rand_df<-tidy(modSNC10.LD90rand, conf.int = TRUE, effects = "fixed")
+sim10LD90rand_df$model <- "Sim 10"
+sim10LD90rand_df$Percent <- "90"
+sim10LD90rand_df$Rand <- "rand"
+
+sim10LD15group_df<-tidy(modSNC10.LD15group, conf.int = TRUE, effects = "fixed")
+sim10LD15group_df$model <- "Sim 10"
+sim10LD15group_df$Percent <- "15"
+sim10LD15group_df$Rand <- "Group"
+
+sim10LD20group_df<-tidy(modSNC10.LD20group, conf.int = TRUE, effects = "fixed")
+sim10LD20group_df$model <- "Sim 10"
+sim10LD20group_df$Percent <- "20"
+sim10LD20group_df$Rand <- "Group"
+
+sim10LD30group_df<-tidy(modSNC10.LD30group, conf.int = TRUE, effects = "fixed")
+sim10LD30group_df$model <- "Sim 10"
+sim10LD30group_df$Percent <- "30"
+sim10LD30group_df$Rand <- "Group"
+
+sim10LD40group_df<-tidy(modSNC10.LD40group, conf.int = TRUE, effects = "fixed")
+sim10LD40group_df$model <- "Sim 10"
+sim10LD40group_df$Percent <- "40"
+sim10LD40group_df$Rand <- "Group"
+
+sim10LD50group_df<-tidy(modSNC10.LD50group, conf.int = TRUE, effects = "fixed")
+sim10LD50group_df$model <- "Sim 10"
+sim10LD50group_df$Percent <- "50"
+sim10LD50group_df$Rand <- "Group"
+
+sim10LD60group_df<-tidy(modSNC10.LD60group, conf.int = TRUE, effects = "fixed")
+sim10LD60group_df$model <- "Sim 10"
+sim10LD60group_df$Percent <- "60"
+sim10LD60group_df$Rand <- "Group"
+
+sim10LD70group_df<-tidy(modSNC10.LD70group, conf.int = TRUE, effects = "fixed")
+sim10LD70group_df$model <- "Sim 10"
+sim10LD70group_df$Percent <- "70"
+sim10LD70group_df$Rand <- "Group"
+
+sim10LD80group_df<-tidy(modSNC10.LD80group, conf.int = TRUE, effects = "fixed")
+sim10LD80group_df$model <- "Sim 10"
+sim10LD80group_df$Percent <- "80"
+sim10LD80group_df$Rand <- "Group"
+
+sim10LD90group_df<-tidy(modSNC10.LD90group, conf.int = TRUE, effects = "fixed")
+sim10LD90group_df$model <- "Sim 10"
+sim10LD90group_df$Percent <- "90"
+sim10LD90group_df$Rand <- "Group"
+```
+
+## Coefficient plots
+```{r,echo=FALSE}
+coefs_allrand <- bind_rows(sim1LDrand_df,sim2LDrand_df,sim3LDrand_df,sim4LDrand_df,sim5LDrand_df,sim6LDrand_df,sim7LDrand_df,sim8LDrand_df,sim9LDrand_df,sim10LDrand_df)
+
+coef_allgroup <- bind_rows(modSNC.LDgroup_df, modSNC2.LDgroup_df, modSNC3.LDgroup_df, modSNC4.LDgroup_df, modSNC5.LDgroup_df, modSNC6.LDgroup_df, modSNC7.LDgroup_df, modSNC8.LDgroup_df, modSNC9.LDgroup_df, modSNC10.LDgroup_df)
+
+
+
+coefs_15_rand <- bind_rows(sim2LD15rand_df,sim3LD15rand_df,sim4LD15rand_df,sim5LD15rand_df,sim6LD15rand_df,sim7LD15rand_df,sim8LD15rand_df,sim9LD15rand_df,sim10LD15rand_df)
+
+coefs_20_rand <- bind_rows(sim1LD20rand_df,sim2LD20rand_df,sim3LD20rand_df,sim4LD20rand_df,sim10LD20rand_df,sim5LD20rand_df,sim6LD20rand_df,sim7LD20rand_df,sim8LD20rand_df,sim9LD20rand_df,sim10LD20rand_df)
+
+coefs_30_rand <- bind_rows(sim1LD30rand_df,sim2LD30rand_df,sim3LD30rand_df,sim4LD30rand_df,sim5LD30rand_df,sim6LD30rand_df,sim7LD30rand_df,sim8LD30rand_df,sim9LD30rand_df,sim10LD30rand_df)
+
+coefs_40_rand <- bind_rows(sim1LD40rand_df,sim2LD40rand_df,sim3LD40rand_df,sim4LD40rand_df,sim10LD40rand_df,sim5LD40rand_df,sim6LD40rand_df,sim7LD40rand_df,sim8LD40rand_df,sim9LD40rand_df,sim10LD40rand_df)
+
+coefs_50_rand <- bind_rows(sim1LD50rand_df,sim2LD50rand_df,sim3LD50rand_df,sim4LD50rand_df,sim10LD50rand_df,sim5LD50rand_df,sim6LD50rand_df,sim7LD50rand_df,sim8LD50rand_df,sim9LD50rand_df,sim10LD50rand_df)
+
+coefs_60_rand <- bind_rows(sim1LD60rand_df,sim2LD60rand_df,sim3LD60rand_df,sim4LD60rand_df,sim10LD60rand_df,sim5LD60rand_df,sim6LD60rand_df,sim7LD60rand_df,sim8LD60rand_df,sim9LD60rand_df,sim10LD60rand_df)
+
+coefs_70_rand <- bind_rows(sim1LD70rand_df,sim2LD70rand_df,sim3LD70rand_df,sim4LD70rand_df,sim10LD70rand_df,sim5LD70rand_df,sim6LD70rand_df,sim7LD70rand_df,sim8LD70rand_df,sim9LD70rand_df,sim10LD70rand_df)
+
+coefs_80_rand <- bind_rows(sim1LD80rand_df,sim2LD80rand_df,sim3LD80rand_df,sim4LD80rand_df,sim10LD80rand_df,sim5LD80rand_df,sim6LD80rand_df,sim7LD80rand_df,sim8LD80rand_df,sim9LD80rand_df,sim10LD80rand_df)
+
+coefs_90_rand <- bind_rows(sim1LD90rand_df,sim2LD90rand_df,sim3LD90rand_df,sim4LD90rand_df,sim10LD90rand_df,sim5LD90rand_df,sim6LD90rand_df,sim7LD90rand_df,sim8LD90rand_df,sim9LD90rand_df,sim10LD90rand_df)
+
+coefs_15_group <- bind_rows(sim1LD15group_df,sim2LD15group_df,sim3LD15group_df,sim4LD15group_df,sim5LD15group_df,sim6LD15group_df,sim7LD15group_df,sim8LD15group_df,sim9LD15group_df,sim10LD15group_df)
+
+coefs_20_group <- bind_rows(sim1LD20group_df,sim2LD20group_df,sim3LD20group_df,sim4LD20group_df,sim10LD20group_df,sim5LD20group_df,sim6LD20group_df,sim7LD20group_df,sim8LD20group_df,sim9LD20group_df,sim10LD20group_df)
+
+coefs_30_group <- bind_rows(sim1LD30group_df,sim2LD30group_df,sim3LD30group_df,sim4LD30group_df,sim5LD30group_df,sim6LD30group_df,sim7LD30group_df,sim8LD30group_df,sim9LD30group_df,sim10LD30group_df)
+
+coefs_40_group <- bind_rows(sim1LD40group_df,sim2LD40group_df,sim3LD40group_df,sim4LD40group_df,sim10LD40group_df,sim5LD40group_df,sim6LD40group_df,sim7LD40group_df,sim8LD40group_df,sim9LD40group_df,sim10LD40group_df)
+
+coefs_50_group <- bind_rows(sim1LD50group_df,sim2LD50group_df,sim3LD50group_df,sim4LD50group_df,sim10LD50group_df,sim5LD50group_df,sim6LD50group_df,sim7LD50group_df,sim8LD50group_df,sim9LD50group_df,sim10LD50group_df)
+
+coefs_60_group <- bind_rows(sim1LD60group_df,sim2LD60group_df,sim3LD60group_df,sim4LD60group_df,sim10LD60group_df,sim5LD60group_df,sim6LD60group_df,sim7LD60group_df,sim8LD60group_df,sim9LD60group_df,sim10LD60group_df)
+
+coefs_70_group <- bind_rows(sim1LD70group_df,sim2LD70group_df,sim3LD70group_df,sim4LD70group_df,sim10LD70group_df,sim5LD70group_df,sim6LD70group_df,sim7LD70group_df,sim8LD70group_df,sim9LD70group_df,sim10LD70group_df)
+
+coefs_80_group <- bind_rows(sim1LD80group_df,sim2LD80group_df,sim3LD80group_df,sim4LD80group_df,sim10LD80group_df,sim5LD80group_df,sim6LD80group_df,sim7LD80group_df,sim8LD80group_df,sim9LD80group_df,sim10LD80group_df)
+
+coefs_90_group <- bind_rows(sim1LD90group_df,sim2LD90group_df,sim3LD90group_df,sim4LD90group_df,sim10LD90group_df,sim5LD90group_df,sim6LD90group_df,sim7LD90group_df,sim8LD90group_df,sim9LD90group_df,sim10LD90group_df)
+```
+
+### Coef plots panels
+```{r,echo=FALSE}
+grayscale<-c("gray","gray","gray","gray","gray","gray","gray","gray","gray","gray")
+
+dwplot(coef_allgroup)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="Random SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_allrand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="Random SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+
+dwplot(coefs_10_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="10% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_10_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="10% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_20_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="20% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_20_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="20% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_30_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="30% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_30_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="30% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_40_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="40% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_40_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="40% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_50_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="50% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_50_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="50% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_60_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="60% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_60_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="60% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_70_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="70% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_70_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="70% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_80_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="80% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_80_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="80% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+dwplot(coefs_90_group)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="90% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+dwplot(coefs_90_rand)+ theme_classic()+
+    labs(x = "Standardized coefficient",y =NULL, title="90% Severe SNC")+
+    scale_color_manual("",values=grayscale) +
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11))+
+  geom_vline(xintercept=0,lty=2)
+
+```
+
+## All
+```{r,echo=FALSE}
+coefs_ALL <- bind_rows(modSNC.LDOG_df,coefs_allrand,coef_allgroup,coefs_15_rand, coefs_20_rand,coefs_30_rand,coefs_40_rand, coefs_50_rand,coefs_60_rand,coefs_70_rand, coefs_80_rand, coefs_90_rand,  coefs_15_group,coefs_20_group,coefs_30_group, coefs_40_group,coefs_50_group, coefs_60_group,coefs_70_group,coefs_80_group, coefs_90_group) %>% rename(Simulation = model)
+coefs_ALL$model <- seq_len(nrow(coefs_ALL))
+#write.csv(coefs_ALL, "SNC_percentile_sim_coefs.csv")
+```
+
+## Percentiles of interest
+- 10, 20, 30, 60, 90
+-- 10 low is sim 9 high is sim 1
+-- 20 low is sim 7 high is sim 1
+-- 30 low is sim 7 high is sim 1
+-- 60 low is sim 1 high is sim 9
+-- 90 low is sim 6 high is sim 8
+```{r,echo=FALSE}
+all_coefsSNC <- read.csv("SNC_percentile_sim_coefs_write.csv")%>%
+  mutate(term = fct_relevel(term, "(Intercept)","SNC*TD", "I(TD_dist_std^2)","TD_dist_std","SNC"))  %>% filter(Rand!="rand")%>%
+  mutate(multiplier = if_else(Percent == 15, "0.5x",
+                              if_else(Percent == 0, "0x",
+                                      if_else(Percent==30, "1x",
+                                              if_else(Percent==60,"2x",
+                                                      if_else(Percent==90, "3x",NA))))))%>%
+  mutate(multiplier = fct_relevel(multiplier, "0x","0.5x","1x","2x","3x")) 
+
+pal5_t <- turbo(5, alpha=1, begin=0.2, end=1)
+
+subset<-all_coefsSNC %>% filter(term !="(Intercept)") %>%  
+  filter(Percent==30|Percent==15|Percent==0|Percent==90|Percent==60| is.na(Percent))%>% filter(Rand=="Group"|Rand=="OG")
+    
+    
+  (coefsnc<-   subset %>%          ggplot(aes(estimate, term, color=multiplier, xmin=conf.low,xmax = conf.high)) + 
+    theme_classic()+
+ 
+    geom_errorbar(position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+      geom_point(aes(color=multiplier),
+  fill="black",alpha=0.3,pch=21, position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+   scale_color_manual("Multiplier",values=pal5_t,labels = c('0x', '0.5x', '1x','2x','3x',"Original model"))+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y =NULL)+
+    scale_y_discrete(labels = c('SNC severity *\nContinentality', expression(paste("Continentality"^"2")),'Continentality','SNC severity'))+
+  theme(
+        axis.text.x = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x = element_text(size=11),
+        axis.title.y = element_text(size=11)))
+#ggsave(coefsnc, file="SSMT_FH_SNC_Sensitivity_coefs.png", dpi=600, height=4, width=6)
+```
+
+### Fit models on original scale
+```{r,echo=FALSE}
+modSNC.LD15groupog <- glmmTMB(LD ~ SNC15_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit")) #high
+
+modSNC.LD0groupog <- glmmTMB(LD ~ SNC_sim_group_no03* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit")) #high
+
+modSNC.LD30groupog <- glmmTMB(LD ~ SNC30_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC.LD60groupog <- glmmTMB(LD ~ SNC60_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC_wDD_sims, family = binomial(link = "logit"))
+
+modSNC3.LD15groupog <- glmmTMB(LD ~ SNC15_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC3_wDD_sims, family = binomial(link = "logit"))
+
+modSNC9.LD60groupog <- glmmTMB(LD ~ SNC60_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+
+modSNC9.LD0groupog <- glmmTMB(LD ~ SNC_sim_group_no03* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC9_wDD_sims, family = binomial(link = "logit"))
+
+modSNC7.LD30groupog <- glmmTMB(LD ~ SNC30_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC7_wDD_sims, family = binomial(link = "logit"))
+
+modSNC6.LD90groupog <- glmmTMB(LD ~ SNC90_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC6_wDD_sims, family = binomial(link = "logit"))
+
+modSNC8.LD90groupog <- glmmTMB(LD ~ SNC90_group* TD_dist+ I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = tmp_SNC8_wDD_sims, family = binomial(link = "logit"))
+```
+
+### Prediction frames
+```{r,echo=FALSE}
+mydfLD_SNC0grouplow<-ggpredict(modSNC9.LD0groupog, terms = c("TD_dist [all]", "SNC_sim_group_no03 [1, 2, 3]"))
+mydfLD_SNC0grouphigh<-ggpredict(modSNC.LD0groupog, terms = c("TD_dist [all]", "SNC_sim_group_no03 [1, 2, 3]"))
+
+mydfLD_SNC15grouplow<-ggpredict(modSNC3.LD15groupog, terms = c("TD_dist [all]", "SNC15_group [1, 2, 3]"))
+mydfLD_SNC15grouphigh<-ggpredict(modSNC.LD15groupog, terms = c("TD_dist [all]", "SNC15_group [1, 2, 3]"))
+
+mydfLD_SNC30grouplow<-ggpredict(modSNC7.LD30groupog, terms = c("TD_dist [all]", "SNC30_group [1, 2, 3]"))
+mydfLD_SNC30grouphigh<-ggpredict(modSNC.LD30groupog, terms = c("TD_dist [all]", "SNC30_group [1, 2, 3]"))
+
+mydfLD_SNC60grouplow<-ggpredict(modSNC.LD60groupog, terms = c("TD_dist [all]", "SNC60_group [1, 2, 3]"))
+mydfLD_SNC60grouphigh<-ggpredict(modSNC9.LD60groupog, terms = c("TD_dist [all]", "SNC60_group [1, 2, 3]"))
+
+mydfLD_SNC90grouplow<-ggpredict(modSNC6.LD90groupog, terms = c("TD_dist [all]", "SNC90_group [1, 2, 3]"))
+mydfLD_SNC90grouphigh<-ggpredict(modSNC8.LD90groupog, terms = c("TD_dist [all]", "SNC90_group [1, 2, 3]"))
+```
+
+
+### Prediction plots
+```{r,echo=FALSE}
+palSNC <- c ("#17A77EFF", "#82CC6CFF","#EDEF5CFF")
+
+(pLDsnc15grouplow<-ggplot(mydfLD_SNC15grouplow, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC severity",values=palSNC, labels=c("low","moderate", "high")) +
+    scale_fill_manual("SNC severity",values=palSNC, labels=c("low","moderate", "high")) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of survival", title="0.5x")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.25,0.39))+
+  theme(legend.text = element_text(size = 9),
+          legend.title = element_text(size= 8.5),
+           legend.background=element_blank())+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc15grouphigh<-ggplot(mydfLD_SNC15grouphigh, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y =NULL, title="0.5x - high")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 9),
+          legend.title = element_text(size= 9),
+           legend.background=element_blank())+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc0grouplow<-ggplot(mydfLD_SNC0grouplow, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC severity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC severity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of survival", title="0x")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.25,0.39))+
+  theme(legend.text = element_text(size = 9),
+          legend.title = element_text(size= 8.5),
+           legend.background=element_blank())+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+(pLDsnc0grouphigh<-ggplot(mydfLD_SNC0grouphigh, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y =NULL, title="0x - high")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+(pLDsnc30grouplow<-ggplot(mydfLD_SNC30grouplow, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of survival", title="1x")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc30grouphigh<-ggplot(mydfLD_SNC30grouphigh, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y =NULL, title="1x - high")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc60grouplow<-ggplot(mydfLD_SNC60grouplow, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of survival", title="2x")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc60grouphigh<-ggplot(mydfLD_SNC60grouphigh, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y =NULL, title="2x - high")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc90grouplow<-ggplot(mydfLD_SNC90grouplow, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",y ="Probability of survival", title="3x")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pLDsnc90grouphigh<-ggplot(mydfLD_SNC90grouphigh, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    scale_fill_manual("SNC\nseverity",values=palSNC, labels=c("low","moderate", "high"), guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",y =NULL, title="3x - high")+
+     scale_y_continuous(limits=c(0.5,1))+
+    theme(legend.position=c(0.4,0.3))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=11),
+          axis.title.y = element_text(size=11))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+```
+
+### Multipane
+```{r,echo=FALSE}
+FigSNCsensmult <- (pLDsnc0grouplow|pLDsnc0grouphigh)/(pLDsnc15grouplow|pLDsnc15grouphigh)/(pLDsnc30grouplow|pLDsnc30grouphigh)/(pLDsnc60grouplow|pLDsnc60grouphigh)/(pLDsnc90grouplow|pLDsnc90grouphigh)
+FigSNCsensmultann <- FigSNCsensmult + plot_annotation(tag_levels = c("a"))
+
+ggsave(FigSNCsensmultann, file="SSMT_FH_SNC_Sensitivity2.png", dpi=600, height=10.5, width=7)
+```
+
+
