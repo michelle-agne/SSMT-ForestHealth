@@ -1,0 +1,1482 @@
+---
+title: "ssmt - FH Transfer Distance Models"
+author: "Michelle C. Agne"
+date: "2026-09-24"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir ="~/SSMT_Projects/Analyses")
+```
+
+# Publication information
+## Michelle C. Agne, Robert A. Slesak, Constance A. Harrington, Beth A. Roskilly, Kristen L. Chadwick, Melissa Fischer
+## Assisted population migration of Douglas-fir using operational transfer guidelines has limited risk to tree health
+## Ecological Applications
+### In review / revision
+
+# Purpose and methods
+This script fits all candidate models and performs model selection for models of climate transfer distance effects on eight tree health indicator response variables. All tree health indicators were simplified to binary (presence/absence) variables. Resulting models assessed probability of a given tree health indicator, and were therefore fit with a binomial distribution and logit link.
+
+Candidate models were fit with transfer distance for one temperature-related variable (MCMT, MWMT, or MAT), one precipitation-related variable (MAP, MSP, or SHM), and temperature differential (TD, also known as continentality index). For each term in the model, the quadratic version of the term was also included. Climate variables were checked for multicollinearity prior to model fitting.
+
+All three-way and two-way combinations were fit as well as all single term models and a random effects only model, resulting in 30 candidate models per response variable. 
+
+All candidate models also included a random effect for seed source region as well as nested random effects of plot within block within site. 
+Exceptions: crown transparency models only included a random effect for seed source and a random effect of site due to model convergence issues with additional nested random effects (in all candidate models). Sunken bole only included a random effect for seed source region and nested random effects of  block within site due to model convergence issues with additional nested random effect (in all candidate models).
+
+All models were evaluated for convergence prior to model selection. Models that did not converge were excluded from model selection. The remaining models for each response variable were compared using AIC. We selected the model with the lowest AIC, although all models within deltaAIC of 2 were considered as equally "good" models. When there were multiple models within 2 deltaAIC, we selected the form that minimized the number of non-significant terms in the model while retaining significant predictors.
+
+Model output and visualization are available in TreeHealth_ClimTransfer.Rmd - this script generates the output Table S2
+
+```{r, include=FALSE}
+#load packages
+library(tidyverse)
+library(scales)
+library(corrplot)
+library(broom)
+library(broom.mixed)
+library(DHARMa)
+library(viridis)
+library(ggpubr)
+library(AICcmodavg)
+library(knitr)
+library(ggstatsplot)
+library(ggeffects)
+library(patchwork)
+library(lme4)
+library(glmmTMB)
+```
+
+
+# Read in climate and field data
+```{r, include=FALSE}
+field_climate_08_23_inc <- read.csv("field_climate_08_23_w18_21_growth_NSavgs.csv", row.names=1, na.strings="NA")%>%
+  mutate(SHM_mult_dist = (-1*(1 - (SHM/Site_SHM)))*100)%>% #calculate the SHM transfer distance in terms of percent 
+  mutate(SHM_mult_dist = round(SHM_mult_dist, digits=3))%>%
+  mutate(MAT_dist_sq = MAT_dist^2,
+         MAP_dist_sq = MAP_dist^2,
+         MCMT_dist_sq = MCMT_dist^2,
+         TD_dist_sq = TD_dist^2,
+         MSP_dist_sq = MSP_dist^2,
+         MWMT_dist_sq = MWMT_dist^2,
+         CMD_dist_sq = CMD_dist^2,
+         CMI_dist_sq = CMI_dist^2,
+         SHM_mult_dist_sq = SHM_mult_dist^2) 
+```
+
+
+# Correlation
+```{r, include=FALSE}
+cor.vars <- field_climate_08_23_inc %>% dplyr::select(MAT_dist:MWMT_dist)
+cor.mat<-cor(cor.vars)
+round(cor.mat,2)
+```
+
+# Read in standardized forest health metrics
+```{r}
+live_trees_w_homesource <- read.csv("live_trees_w_homesource.csv", row.names=1, na.strings="NA")
+```
+
+## Join
+```{r}
+live_trees_cond <- live_trees_w_homesource %>% dplyr::select(S, PLT, TAG, STEM:Gall_diff)
+
+field_climate_08_23 <- right_join(field_climate_08_23_inc,live_trees_cond, by=c("S","PLT","TAG")) %>%
+  mutate(SITE_NAME = as.factor(SITE_NAME))
+```
+
+## Standardize all predictors
+```{r, echo=FALSE}
+field_climate_08_23$Site_MCMT_std <- (field_climate_08_23$Site_MCMT - mean(field_climate_08_23$Site_MCMT))/(2*sd(field_climate_08_23$Site_MCMT))
+field_climate_08_23$MCMT_dist_std <- (field_climate_08_23$MCMT_dist - mean(field_climate_08_23$MCMT_dist))/(2*sd(field_climate_08_23$MCMT_dist))
+field_climate_08_23$Site_MWMT_std <- (field_climate_08_23$Site_MWMT - mean(field_climate_08_23$Site_MWMT))/(2*sd(field_climate_08_23$Site_MWMT))
+field_climate_08_23$MWMT_dist_std <- (field_climate_08_23$MWMT_dist - mean(field_climate_08_23$MWMT_dist))/(2*sd(field_climate_08_23$MWMT_dist))
+field_climate_08_23$Site_MSP_std <- (field_climate_08_23$Site_MSP - mean(field_climate_08_23$Site_MSP))/(2*sd(field_climate_08_23$Site_MSP))
+field_climate_08_23$MSP_dist_std <- (field_climate_08_23$MSP_dist - mean(field_climate_08_23$MSP_dist))/(2*sd(field_climate_08_23$MSP_dist))
+field_climate_08_23$Site_TD_std <- (field_climate_08_23$Site_TD - mean(field_climate_08_23$Site_TD))/(2*sd(field_climate_08_23$Site_TD))
+field_climate_08_23$TD_dist_std <- (field_climate_08_23$TD_dist - mean(field_climate_08_23$TD_dist))/(2*sd(field_climate_08_23$TD_dist))
+field_climate_08_23$Site_SHM_std <- (field_climate_08_23$Site_SHM - mean(field_climate_08_23$Site_SHM))/(2*sd(field_climate_08_23$Site_SHM))
+field_climate_08_23$SHM_dist_std <- (field_climate_08_23$SHM_dist - mean(field_climate_08_23$SHM_dist))/(2*sd(field_climate_08_23$SHM_dist))
+field_climate_08_23$Site_MAP_std <- (field_climate_08_23$Site_MAP - mean(field_climate_08_23$Site_MAP))/(2*sd(field_climate_08_23$Site_MAP))
+field_climate_08_23$MAP_dist_std <- (field_climate_08_23$MAP_dist - mean(field_climate_08_23$MAP_dist))/(2*sd(field_climate_08_23$MAP_dist))
+field_climate_08_23$Site_MAT_std <- (field_climate_08_23$Site_MAT - mean(field_climate_08_23$Site_MAT))/(2*sd(field_climate_08_23$Site_MAT))
+field_climate_08_23$MAT_dist_std <- (field_climate_08_23$MAT_dist - mean(field_climate_08_23$MAT_dist))/(2*sd(field_climate_08_23$MAT_dist))
+```
+
+# Foliage disease symptoms
+Strong evidence that MCMT, MSP are the most important temp and precip variables
+
+## Crown color
+Null model
+MCMT + MSP + TD
+```{r,echo=FALSE}
+mCC_0_std <- glmer(CC_yellow ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mCC_0_std)
+# plot(mCC_0_std_simres, sub="mCC_0_std")#
+summary(mCC_0_std)
+
+# mCC_2_std <- glmer(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_2_std_simres <- simulateResiduals(mCC_2_std)
+# plot(mCC_2_std_simres, sub="mCC_2_std")#
+# summary(mCC_2_std)
+
+mCC_0_stdTMB <- glmmTMB(CC_yellow ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+summary(mCC_0_stdTMB)
+
+ mCC_2_stdTMB <- glmmTMB(CC_yellow ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23, family = binomial(link = "logit"))
+ #mCC_0_std_simres <- simulateResiduals(mCC_2_stdTMB)
+ #plot(mCC_0_std_simres, sub="mCC_2_stdTMB")
+#Both glmer and TMB form look good
+ summary(mCC_2_stdTMB)
+ 
+# mCC_2 <- glmer(CC_yellow ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+ mCC_2TMB <- glmmTMB(CC_yellow ~ MCMT_dist +  I(MCMT_dist^2) + MSP_dist+ I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23, family = binomial(link = "logit"))
+
+ # For use in Figure 2 - relative effects of coefficients
+CC_df<-tidy(mCC_2_stdTMB, conf.int = TRUE, effects = "fixed")
+CC_df$Indicator <- "Chlorosis"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfCC_MCMT_TD <-ggpredict(mCC_2TMB, terms = c("MCMT_dist [all]", "TD_dist[-5,0,5,10]"))
+dfCC_MSP_TD <-ggpredict(mCC_2TMB, terms = c("MSP_dist [all]", "TD_dist[-5,0,5,10]"))
+dfCC_TD_MSP<-ggpredict(mCC_2TMB, terms = c("TD_dist [all]", "MSP_dist[-300,0,300]"))
+dfCC_MSP_MCMT4<-ggpredict(mCC_2TMB, terms = c("MSP_dist [all]", "MCMT_dist[-4, -2, 0, 4]"))
+dfCC_TD_MCMT <-ggpredict(mCC_2TMB, terms = c("TD_dist [all]", "MCMT_dist[-4,-2,0,4]"))
+print(dfCC_MSP_MCMT4,n=Inf)
+print(dfCC_MSP_TD,n=Inf)
+print(dfCC_TD_MSP,n=Inf)
+
+ggpredict(mCC_2TMB, terms = c("TD_dist [-1.5,-1,0]", "MSP_dist[0,10,70]","MCMT_dist[0,-2,-4]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palMCMT4 <-hcl.colors(4, palette="Zissou 1", alpha=1)
+palMSPnew <- c("#A36B2BFF","#94B9A7FF","#2686A0FF")
+palTDnew <- c("#2686A0FF", "#94B9A7FF", "#C6AA74FF", "#A36B2BFF")
+
+
+hcl.colors(5, palette="Fall", alpha=1)
+
+(pCC34<-ggplot(dfCC_MSP_MCMT4, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MCMT transfer distance (°C)",values=palMCMT4) +
+    scale_fill_manual("MCMT transfer distance (°C)",values=palMCMT4) +
+    guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL, title="Figure 3",
+         y ="Probability of chlorosis")+
+  #  scale_x_continuous(limits=c(-310,210))+
+     scale_y_continuous(limits=c(0,1))+
+    #geom_vline(xintercept=400)+
+    theme(legend.position=c(0.52,0.78))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10),
+         legend.background=element_blank(),
+   axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+    #  annotate("text", x= -310, y = 0.75, label = "Figure 3", size=4))
+
+(pCC2<-ggplot(dfCC_TD_MSP, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP transfer distance (mm)",values=palMSPnew) +
+    scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew) +
+    guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of chlorosis")+
+    scale_y_continuous(limits=c(0,1))+
+    theme(legend.position=c(0.6,0.83))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.background=element_blank(),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pCC41<-ggplot(dfCC_MSP_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew) +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew) +
+        guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,
+         y ="Probability of chlorosis")+
+     scale_y_continuous(limits=c(0,1.15),breaks=c(0,.25,.5,.75,1))+
+        theme(legend.position=c(0.6,0.81))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10),
+           legend.background=element_blank())+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pCC4<-ggplot(dfCC_MCMT_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palMCMT4) +
+    scale_fill_manual("TD transfer distance (°C)",values=palMCMT4) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean coldest month temperature transfer distance (°C)",
+         y ="Probability of chlorosis")+
+     scale_y_continuous(limits=c(0,1))+
+        theme(legend.position=c(0.6,0.85))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pCC5<-ggplot(dfCC_TD_MCMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MCMT\ntransfer\ndistance",values=palMCMT4) +
+    scale_fill_manual("MCMT\ntransfer\ndistance",values=palMCMT4) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of chlorosis")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Presentation figs 2
+```{r, echo=FALSE}
+dfCC_MSP_pres<-ggpredict(mCC_2TMB, terms = c(terms="MSP_dist [all]"))
+dfCC_TD_pres<-ggpredict(mCC_2TMB, terms = c(terms="TD_dist [all]"))
+ dfCC_MCMT_pres<-ggpredict(mCC_2TMB, terms = c(terms="MCMT_dist [all]"))
+
+(pCC1pres<-ggplot(dfCC_MCMT_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean coldest month temperature transfer distance (°C)",
+         y ="Probability of chlorosis")+
+      geom_vline(xintercept=0,linetype="dashed")+
+     scale_y_continuous(limits=c(0,0.3), breaks=c(0,0.15,0.30))+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+#ggsave(pCC1pres, file="Pres_SSMT_FH_CC_MCMT.png", dpi=300, height=4, width=6)
+
+(pCC2pres<-ggplot(dfCC_TD_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of chlorosis")+
+   #  scale_y_continuous(limits=c(0,1))+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+#ggsave(pCC2pres, file="Pres_SSMT_FH_CC_TD.png", dpi=300, height=4, width=6)
+
+(pCC3pres<-ggplot(dfCC_MSP_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "May - September precipitation transfer distance (mm)",
+         y ="Probability of chlorosis")+
+    # scale_y_continuous(limits=c(0,1))+
+      geom_vline(xintercept=0,linetype="dashed")+
+     scale_y_continuous(limits=c(0,0.55), breaks=c(0,0.15,0.30,0.45))+
+    theme(legend.justification=c(1,0.9))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+#ggsave(pCC3pres, file="Pres_SSMT_FH_CC_MSP.png", dpi=300, height=4, width=6)
+```
+
+## Crown transparency
+Null model
+MCMT + MSP + TD
+```{r,echo=FALSE}
+# mCT_0_std <- glmer(CT_sparse ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mCT_0_std)
+#  plot(mCC_0_std_simres, sub="mCT_0_std")#
+# 
+# 
+# mCT_2_std <- glmer(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mCT_2_std)
+#  plot(mCC_0_std_simres, sub="mCT_2_std")#
+
+ mCT_0_stdTMB <- glmmTMB(CT_sparse ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+ summary(mCT_0_stdTMB)
+ 
+ mCT_2_stdTMB <- glmmTMB(CT_sparse ~ MCMT_dist_std +  I(MCMT_dist_std^2) + MSP_dist_std + I(MSP_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mCT_2_stdTMB)
+# plot(mCC_0_std_simres, sub="mCT_2_stdTMB")#step failure - check results carefully
+ summary(mCT_2_stdTMB) #no evidence of NAs for likelihood, AIC, BIC
+ # diagnose(mCT_2_stdTMB) #large z statistics for plot/block/site and TD_dist^2, but the std dev for the random effect is not near zero, and TD_dist^2 is likely to have a large effect based on past work
+ # 
+ # testUniformity(mCC_0_std_simres) #looks good
+ # testOutliers(mCC_0_std_simres) #looks good
+ # testDispersion(mCC_0_std_simres) #looks good
+ # testQuantiles(mCC_0_std_simres) #quantile pattern, but relatively small, all other diagnostics seem okay
+ # 
+  mCT_2_TMB <- glmmTMB(CT_sparse ~ scale(MCMT_dist) +  scale(I(MCMT_dist^2)) + scale(MSP_dist) + scale(I(MSP_dist^2)) + scale(TD_dist) + scale(I(TD_dist^2)) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION),  data = field_climate_08_23, family = binomial(link = "logit"))
+  summary(mCT_2_TMB)
+  confint(mCT_2_TMB)
+
+  mCT_2 <- glmer(CT_sparse ~ MCMT_dist+  I(MCMT_dist^2) + MSP_dist + I(MSP_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+  
+  CT_df<-tidy(mCT_2_stdTMB, conf.int = TRUE, effects = "fixed")
+CT_df$Indicator <- "Crown sparseness"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfCT_TD_MSP<-ggpredict(mCT_2_TMB, terms = c("TD_dist [all]", "MSP_dist[-250,0,250]"))
+dfCT_MSP_TD <-ggpredict(mCT_2_TMB, terms = c("MSP_dist [all]", "TD_dist[-5,0,5,10]"))
+dfCT_MSP_MCMT4<-ggpredict(mCT_2_TMB, terms = c("MSP_dist [all]", "MCMT_dist[-4,-2,0,4]"),type="fixed")
+dfCT_MCMT_TD <-ggpredict(mCT_2_TMB, terms = c("MCMT_dist [all]", "TD_dist[-5,0,5,10]"))
+dfCT_TD_MCMT <-ggpredict(mCT_2_TMB, terms = c("TD_dist [all]", "MCMT_dist[-4,-2,0,4]"))
+print(dfCT_MSP_MCMT4)
+ggpredict(mCT_2_TMB, terms=c("TD_dist [0,-1,-1.5]", "MSP_dist[0,10,70]","MCMT_dist[0,-2,-4]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+(pCT2<-ggplot(dfCT_TD_MSP, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MSP\ntransfer\ndistance",values=palMSPnew, guide="none") +
+    scale_fill_manual("MSP\ntransfer\ndistance",values=palMSPnew, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of crown sparseness")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+
+(pCT3<-ggplot(dfCT_MSP_MCMT4, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MCMT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    scale_fill_manual("MCMT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "MSP transfer distance (mm)",
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+   # scale_x_continuous(limits=c(-310,210))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+   geom_ribbon(alpha = .1, colour = NA) )
+
+(pCT41<-ggplot(dfCT_MSP_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance (°C)",values=palTDnew, guide="none") +
+      #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x ="MSP transfer distance (mm)",
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+        theme(legend.position=c(0.6,0.85))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pCT4<-ggplot(dfCT_MCMT_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD\ntransfer\ndistance",values=palMCMT4) +
+    scale_fill_manual("TD\ntransfer\ndistance",values=palMCMT4) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean coldest month temperature transfer distance (°C)",
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pCT5<-ggplot(dfCT_TD_MCMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MCMT\ntransfer\ndistance",values=palMCMT4) +
+    scale_fill_manual("MCMT\ntransfer\ndistance",values=palMCMT4) +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of crown sparseness")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Presentation figs 2
+```{r, echo=FALSE}
+dfCT_MCMT<-ggpredict(mCT_2_TMB, terms = c(terms="MCMT_dist [all]"))
+dfCT_TD<-ggpredict(mCT_2_TMB, terms = c(terms="TD_dist [all]"))
+dfCT_MSP<-ggpredict(mCT_2_TMB, terms = c(terms="MSP_dist [all]"))
+
+(pCT1pres<-ggplot(dfCT_MCMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean coldest month temperature transfer distance (°C)",
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+    theme(legend.justification=c(1,0.9))+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pCT1pres, file="Pres_SSMT_FH_CT_MCMT.png", dpi=300, height=4, width=6)
+
+(pCT2pres<-ggplot(dfCT_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+    theme(legend.justification=c(1,0.9))+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pCT2pres, file="Pres_SSMT_FH_CT_TD.png", dpi=300, height=4, width=6)
+
+(pCT3pres<-ggplot(dfCT_MSP, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT4, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "May - September precipitation transfer distance (mm)",
+         y ="Probability of crown sparseness")+
+     scale_y_continuous(limits=c(0,1))+
+    theme(legend.justification=c(1,0.9))+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+#ggsave(pCT3pres, file="Pres_SSMT_FH_CT_MSP.png", dpi=300, height=4, width=6)
+```
+
+# Figure 3 multipanel
+```{r, echo = FALSE}
+CCCTBRmult4 <- (pCC34|pCC2)/(pCT3|pCT2)
+CCCTBRmult_ann4 <- CCCTBRmult4 + plot_annotation(tag_levels = c("a"))
+
+#ggsave(CCCTBRmult_ann4, file="SSMT_FH_CC_CT_multi_Figure3_update.png", dpi=600, height=6.5, width=7)
+#ggsave(CCCTBRmult_ann4, file="Figure3_update.eps", dpi=600, height=6.5, width=7)
+
+CCCTBRmult2 <- (pCC34|pCC41)/(pCT3|pCT41)
+CCCTBRmult_ann2 <- CCCTBRmult2 + plot_annotation(tag_levels = c("a"))
+
+#ggsave(CCCTBRmult_ann2, file="SSMT_FH_CC_CT_multi_Figure3_update2.png", dpi=600, height=6.5, width=7)
+#ggsave(CCCTBRmult_ann2, file="Figure3_update2.eps", dpi=600, height=6.5, width=7)
+```
+
+
+# Canker disease symptoms
+## Top dieback
+Null model
+MWMT + SHM + TD
+```{r,echo=FALSE}
+# mTDB_0_std <- glmer(TopDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTDB_0_std)
+# plot(mCC_0_std_simres, sub="mTDB_0_std")#
+# 
+# 
+# mTDB_4_std <- glmer(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTDB_4_std)
+# plot(mCC_0_std_simres, sub="mTDB_4_std")#bad convergence
+
+mTDB_0_stdTMB <- glmmTMB(TopDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mTDB_0_stdTMB)
+#plot(mCC_0_std_simres, sub="mTDB_0_stdTMB")#
+summary(mTDB_0_stdTMB)
+
+mTDB_4_stdTMB <- glmmTMB(TopDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mTDB_4_stdTMB)
+#plot(mCC_0_std_simres, sub="mTDB_4_stdTMB")#looks good
+summary(mTDB_4_stdTMB)
+
+mTDB_4_TMB <- glmmTMB(TopDB01 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+# mTDB_6_stdTMB <- glmmTMB(TopDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTDB_6_stdTMB)
+# plot(mCC_0_std_simres, sub="mTDB_6_stdTMB")#looks good
+
+TDB_df<-tidy(mTDB_4_stdTMB, conf.int = TRUE, effects = "fixed")
+TDB_df$Indicator <- "Top dieback"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfTDB_MWMT_SHM<-ggpredict(mTDB_4_TMB, terms = c("MWMT_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfTDB_TD_SHM<-ggpredict(mTDB_4_TMB, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfTDB_SHM_MWMT<-ggpredict(mTDB_4_TMB, terms = c("SHM_dist [all]", "MWMT_dist[-4, -2,0,4]"))
+dfTDB_SHM_TD<-ggpredict(mTDB_4_TMB, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+print(dfTDB_SHM_TD)
+ggpredict(mTDB_4_TMB, terms=c("TD_dist [0,-1,-1.5]", "SHM_dist[0,-15,-80]","MWMT_dist[0,-3,-4.5]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+palTDnew <- c("#2686A0FF", "#94B9A7FF", "#C6AA74FF", "#A36B2BFF")
+
+
+(pTDB22<-ggplot(dfTDB_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of top dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pTDB21<-ggplot(dfTDB_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality\ntransfer distance (°C)",y ="Probability of top dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pTDB20<-ggplot(dfTDB_SHM_MWMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MWMT transfer distance",values=palMCMT4) +
+    scale_fill_manual("MWMT transfer distance",values=palMCMT4) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index\ntransfer distance (°C)",y ="Probability of top dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pTDB200<-ggplot(dfTDB_SHM_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance",values=palTDnew, guide="none") +
+     #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of top dieback")+
+ theme(legend.position=c(0.52,0.78))+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10),
+         legend.background=element_blank(),
+   axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Presentation figs
+```{r, echo=FALSE, warning=FALSE}
+dfTDB_TD_pres <-ggpredict(mTDB_4_TMB, terms = c(terms="TD_dist [all]"))
+dfTDB_SHM_pres <-ggpredict(mTDB_4_TMB, terms = c(terms="SHM_dist [all]"))
+dfTDB_MWMT_pres <-ggpredict(mTDB_4_TMB, terms = c(terms="MWMT_dist [all]"))
+
+(pTDB3<-ggplot(dfTDB_TD_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palSHM,guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palSHM,guide="none") +
+   #  scale_y_continuous(breaks=c(0, 0.15,0.3,0.45))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",y ="Probability of top dieback")+
+    theme(legend.position=c(0.5,0.9))+
+     geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pTDB3, file="Pres_SSMT_FH_TopDB_TD.png", dpi=300, height=4, width=6)
+
+(pTDB33<-ggplot(dfTDB_SHM_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palTD,guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palTD,guide="none") +
+    # scale_y_continuous(breaks=c(0, 0.15,0.3,0.45))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index transfer distance",y ="Probability of top dieback")+
+    theme(legend.position=c(0.5,0.9))+
+     geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+     theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pTDB33, file="Pres_SSMT_FH_TopDB_SHM.png", dpi=300, height=4, width=6)
+
+
+(pTDB31<-ggplot(dfTDB_MWMT_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palTD,guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palTD,guide="none") +
+    # scale_y_continuous(breaks=c(0, 0.15,0.3,0.45))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature transfer distance (°C)",y ="Probability of top dieback")+
+    theme(legend.position=c(0.5,0.9))+
+     geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+     theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pTDB31, file="Pres_SSMT_FH_TopDB_MWMT.png", dpi=300, height=4, width=6)
+```
+
+## Sunken bole
+Null model
+MWMT + SHM + TD
+```{r,echo=FALSE}
+# mSnk_0_std <- glmer(SnkBl01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mSnk_0_std)
+# plot(mCC_0_std_simres, sub="mSnk_0_std")#
+# 
+# 
+# mSnk_4_std <- glmer(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mSnk_4_std)
+# plot(mCC_0_std_simres, sub="mSnk_4_std")#
+# summary(mSnk_4_std)
+
+mSnk_0_stdTMB <- glmmTMB(SnkBl01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mSnk_0_stdTMB)
+#plot(mCC_0_std_simres, sub="mSnk_0_stdTMB")#
+summary(mSnk_0_stdTMB)
+
+mSnk_4_stdTMB <- glmmTMB(SnkBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23,  family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mSnk_4_stdTMB)
+#plot(mCC_0_std_simres, sub="mSnk_4_stdTMB")#looks good
+summary(mSnk_4_stdTMB)
+
+mSnk_4_TMB <- glmmTMB(SnkBl01 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist+ I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, 
+                              control=glmmTMBControl(optimizer=optim,
+                                                     optArgs=list(method="BFGS")),family = binomial(link = "logit"))
+
+# 
+# mSnk_6_stdTMB <- glmmTMB(SnkBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mSnk_6_stdTMB)
+# plot(mCC_0_std_simres, sub="mSnk_6_stdTMB")#looks good
+
+Snk_df<-tidy(mSnk_4_stdTMB, conf.int = TRUE, effects = "fixed")
+Snk_df$Indicator <- "Sunken bole"
+```
+
+### Prediction plots 
+```{r, echo=FALSE, warning=FALSE}
+dfSnk_MWMT_SHM<-ggpredict(mSnk_4_TMB, terms = c("MWMT_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfSnk_TD_SHM<-ggpredict(mSnk_4_TMB, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfSnk_SHM_MWMT<-ggpredict(mSnk_4_TMB, terms = c("SHM_dist [all]", "MWMT_dist[-4, -2,0,4]"))
+dfSnk_SHM_TD<-ggpredict(mSnk_4_TMB, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+print(dfSnk_SHM_MWMT,n=Inf)
+ggpredict(mSnk_4_TMB, terms=c("TD_dist [0,-1,-1.5]", "SHM_dist[0,-15,-80]","MWMT_dist[0,-3,-4.5]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+
+(pSnk22<-ggplot(dfSnk_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of sunken bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pSnk21<-ggplot(dfSnk_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality\ntransfer distance (°C)",y ="Probability of sunken bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pSnk20<-ggplot(dfSnk_SHM_MWMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MWMT transfer distance",values=palMCMT4) +
+    scale_fill_manual("MWMT transfer distance",values=palMCMT4) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index\ntransfer distance",y ="Probability of sunken bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pSnk200<-ggplot(dfSnk_SHM_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance",values=palTDnew, guide="none") +
+         #  guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of sunken bole")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Presentation figs
+```{r, echo=FALSE, warning=FALSE}
+dfSnk_MWMT_pres<-ggpredict(mSnk_4_TMB, terms = c(terms="MWMT_dist [all]"))
+dfSnk_SHM_pres<-ggpredict(mSnk_4_TMB, terms = c(terms="SHM_dist [all]"))
+dfSnk_TD_pres<-ggpredict(mSnk_4_TMB, terms = c(terms="TD_dist [all]"))
+
+(pSnk3<-ggplot(dfSnk_MWMT_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high,))+
+  #  scale_color_manual("SHM transfer distance",values=palSHM, guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palSHM, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature transfer distance (°C)",y ="Probability of sunken bole")+
+    theme(legend.position="top")+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pSnk3, file="Pres_SSMT_FH_Snk_MWMT.png", dpi=300, height=4, width=6)
+
+
+(pSnk31<-ggplot(dfSnk_TD_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palTD, guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palTD, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",y ="Probability of sunken bole")+
+    theme(legend.position="top")+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pSnk31, file="Pres_SSMT_FH_Snk_TD.png", dpi=300, height=4, width=6)
+
+(pSnk33<-ggplot(dfSnk_SHM_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palTD, guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palTD, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index transfer distance",y ="Probability of sunken bole")+
+    theme(legend.position="top")+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pSnk33, file="Pres_SSMT_FH_Snk_SHM.png", dpi=300, height=4, width=6)
+```
+
+## Pitch streaming on bole
+Null model
+MWMT + SHM + TD
+```{r,echo=FALSE}
+# mPBl_0_std <- glmer(PBl01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mPBl_0_std)
+# plot(mCC_0_std_simres, sub="mPBl_0_std")#
+# 
+# mPBl_4_std <- glmer(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mPBl_4_std)
+# plot(mCC_0_std_simres, sub="mPBl_4_std")#
+# 
+
+mPBl_0_stdTMB <- glmmTMB(PBl01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mPBl_0_stdTMB)
+#plot(mCC_0_std_simres, sub="mPBl_0_stdTMB")#
+summary(mPBl_0_stdTMB)
+
+
+mPBl_4_stdTMB <- glmmTMB(PBl01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mPBl_4_stdTMB)
+#plot(mCC_0_std_simres, sub="mPBl_4_stdTMB")#
+summary(mPBl_4_stdTMB)
+
+mPBl_4_TMB <- glmmTMB(PBl01 ~ MWMT_dist+  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# 
+# mPBl_6_stdTMB <- glmmTMB(PBl01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mPBl_6_stdTMB)
+# plot(mCC_0_std_simres, sub="mPBl_6_stdTMB")#
+
+PBl_df<-tidy(mPBl_4_stdTMB, conf.int = TRUE, effects = "fixed")
+PBl_df$Indicator <- "Pitch streaming on bole"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfPBl_MWMT_SHM<-ggpredict(mPBl_4_TMB, terms = c("MWMT_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfPBl_TD_SHM<-ggpredict(mPBl_4_TMB, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfPBl_SHM_MWMT<-ggpredict(mPBl_4_TMB, terms = c("SHM_dist [all]", "MWMT_dist[-4, -2,0,4]"))
+dfPBl_SHM_TD<-ggpredict(mPBl_4_TMB, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+print(dfPBl_SHM_MWMT,n=Inf)
+ggpredict(mPBl_4_TMB, terms=c("TD_dist [0,-1,-1.5]", "SHM_dist[0,-15,-80]","MWMT_dist[0,-3,-4.5]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+
+(pPBl22<-ggplot(dfPBl_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of pitch streaming on bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pPBl21<-ggplot(dfPBl_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality\ntransfer distance (°C)",y ="Probability of pitch streaming on bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pPBl20<-ggplot(dfPBl_SHM_MWMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MWMT transfer distance",values=palMCMT4) +
+    scale_fill_manual("MWMT transfer distance",values=palMCMT4) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index\ntransfer distance (°C)",y ="Probability of pitch streaming on bole")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pPBl200<-ggplot(dfPBl_SHM_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance",values=palTDnew, guide="none") +
+        #   guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",y ="Probability of pitch streaming on bole")+
+ theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Presentation figs
+```{r, echo=FALSE, warning=FALSE}
+dfPBl_MWMT_pres <-ggpredict(mPBl_4_TMB, terms = c(terms="MWMT_dist [all]"))
+dfPBl_SHM_pres <-ggpredict(mPBl_4_TMB, terms = c(terms="SHM_dist [all]"))
+dfPBl_TD_pres <-ggpredict(mPBl_4_TMB, terms = c(terms="TD_dist [all]"))
+
+(pPBl3<-ggplot(dfPBl_MWMT_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palSHM, guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palSHM, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+  #  scale_y_continuous(breaks=c(0, 0.02,0.04,0.06,0.08,0.1,0.12))+
+    labs(x = "Mean warmest month temperature transfer distance (°C)",y ="Probability of pitch streaming on bole")+
+     theme(legend.position="top")+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pPBl3, file="Pres_SSMT_FH_PBl_MWMT.png", dpi=300, height=4, width=6)
+
+
+(pPBl31<-ggplot(dfPBl_TD_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palSHM, guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palSHM, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+  #  scale_y_continuous(breaks=c(0, 0.02,0.04,0.06,0.08,0.1,0.12))+
+    labs(x = "Continentality transfer distance (°C)",y ="Probability of pitch streaming on bole")+
+     theme(legend.position="top")+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pPBl31, file="Pres_SSMT_FH_PBl_TD.png", dpi=300, height=4, width=6)
+
+(pPBl33<-ggplot(dfPBl_SHM_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+   # scale_color_manual("SHM transfer distance",values=palTD, guide="none") +
+   # scale_fill_manual("SHM transfer distance",values=palTD, guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+   # scale_y_continuous(breaks=c(0, 0.02,0.04,0.06,0.08,0.1,0.12))+
+    labs(x = "Summer heat moisture index transfer distance",y ="Probability of pitch streaming on bole")+
+     theme(legend.position="top")+
+      geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pPBl33, file="Pres_SSMT_FH_PBl_SHM.png", dpi=300, height=4, width=6)
+```
+
+## Branch dieback
+
+```{r,echo=FALSE}
+# mBrDB_0_std <- glmer(BrDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mBrDB_0_std)
+# plot(mCC_0_std_simres, sub="mBrDB_0_std")#
+#  
+# 
+# mBrDB_4_std <- glmer(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mBrDB_4_std)
+# plot(mCC_0_std_simres, sub="mBrDB_4_std")#minor outlier
+# 
+# 
+# mBrDB_6_std <- glmer(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mBrDB_6_std)
+# plot(mCC_0_std_simres, sub="mBrDB_6_std")#looks good
+
+
+mBrDB_0_stdTMB <- glmmTMB(BrDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mBrDB_0_stdTMB)
+#plot(mCC_0_std_simres, sub="mBrDB_0_stdTMB")#
+ summary(mBrDB_0_stdTMB)
+
+mBrDB_4_stdTMB <- glmmTMB(BrDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mBrDB_4_stdTMB)
+#plot(mCC_0_std_simres, sub="mBrDB_4_stdTMB")#looks good
+summary(mBrDB_4_stdTMB)
+
+# mBrDB_6_stdTMB <- glmmTMB(BrDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mBrDB_6_stdTMB)
+# plot(mCC_0_std_simres, sub="mBrDB_6_stdTMB")#step failure
+
+mBrDB_4_TMB <- glmmTMB(BrDB01 ~ MWMT_dist+  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+BrDB_df<-tidy(mBrDB_4_stdTMB, conf.int = TRUE, effects = "fixed")
+BrDB_df$Indicator <- "Branch dieback"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfBrDB_MWMT_SHM<-ggpredict(mBrDB_4_TMB, terms = c("MWMT_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfBrDB_TD_SHM<-ggpredict(mBrDB_4_TMB, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfBrDB_SHM_MWMT<-ggpredict(mBrDB_4_TMB, terms = c("SHM_dist [all]", "MWMT_dist[-4, -2,0,4]"))
+dfBrDB_SHM_TD<-ggpredict(mBrDB_4_TMB, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+print(dfBrDB_SHM_TD,n=Inf)
+
+ggpredict(mBrDB_4_TMB, terms=c("TD_dist [0,-1,-1.5]", "SHM_dist[0,-15,-80]","MWMT_dist[0,-3,-4.5]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+
+(pBrDB22<-ggplot(dfBrDB_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of branch dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pBrDB21<-ggplot(dfBrDB_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality\ntransfer distance (°C)",y ="Probability of branch dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pBrDB20<-ggplot(dfBrDB_SHM_MWMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MWMT transfer distance",values=palMCMT4) +
+    scale_fill_manual("MWMT transfer distance",values=palMCMT4) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index\ntransfer distance (°C)",y ="Probability of branch dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pBrDB200<-ggplot(dfBrDB_SHM_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance",values=palTDnew) +
+    scale_fill_manual("TD transfer distance",values=palTDnew) +
+           guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of branch dieback")+
+     theme(legend.position=c(0.52,0.78))+
+     theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10),
+         legend.background=element_blank(),
+axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+### Presentation figures
+```{r, echo=FALSE, warning=FALSE}
+dfBrDB_MWMT_pres<-ggpredict(mBrDB_4_TMB, terms = c(terms="MWMT_dist [all]"))
+dfBrDB_SHM_pres<-ggpredict(mBrDB_4_TMB, terms = c(terms="SHM_dist [all]"))
+dfBrDB_TD_pres<-ggpredict(mBrDB_4_TMB, terms = c(terms="TD_dist [all]"))
+
+(pBrDB1pres<-ggplot(dfBrDB_MWMT_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MSP transfer distance (mm)",values=palMSPnew,guide="none") +
+   # scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew,guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean annual temperature transfer distance (°C)",
+         y ="Probability of branch dieback")+
+     theme(legend.position=c(0.5,0.9))+
+  #  scale_y_continuous(limits=c(0,0.06))+
+    geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pBrDB1pres, file="Pres_SSMT_FH_BrDB_MWMT.png", dpi=300, height=4, width=6)
+
+(pBrDB01pres<-ggplot(dfBrDB_TD_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+    #scale_color_manual("MSP transfer distance (mm)",values=palMSPnew,guide="none") +
+   # scale_fill_manual("MSP transfer distance (mm)",values=palMSPnew,guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality transfer distance (°C)",
+         y ="Probability of branch dieback")+
+     theme(legend.position=c(0.5,0.9))+
+  #  scale_y_continuous(limits=c(0,0.06))+
+    geom_vline(xintercept=0,linetype="dashed")+
+    theme(legend.text = element_text(size = 9.5),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pBrDB01pres, file="Pres_SSMT_FH_BrDB_TD.png", dpi=300, height=4, width=6)
+
+
+(pBrDB2pres<-ggplot(dfBrDB_SHM_pres, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high))+
+  #  scale_color_manual("MAT\ntransfer\ndistance",values=palMCMT,guide="none") +
+   # scale_fill_manual("MAT\ntransfer\ndistance",values=palMCMT,guide="none") +
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index transfer distance",
+         y ="Probability of branch dieback")+
+    theme(legend.position="top")+
+     geom_vline(xintercept=0,linetype="dashed")+
+   # scale_y_continuous(limits=c(0,0.6))+
+    theme(legend.text = element_text(size = 10),
+          legend.title = element_text(size= 10))+
+    theme(axis.text.x = element_text(size=13),
+          axis.text.y = element_text(size=13),
+          axis.title.x = element_text(size=14),
+          axis.title.y = element_text(size=14))+
+    geom_ribbon(alpha = .1, colour = NA) )
+ggsave(pBrDB2pres, file="Pres_SSMT_FH_BrDB_SHM.png", dpi=300, height=4, width=6)
+```
+
+# Other symptoms
+## Tip dieback
+
+```{r,echo=FALSE}
+# mTip_0_std <- glmer(TipDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTip_0_std)
+# plot(mCC_0_std_simres, sub="mTip_0_std")#
+# 
+# mTip_4_std <- glmer(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTip_4_std)
+# plot(mCC_0_std_simres, sub="mTip_4_std")#looks good
+# 
+# 
+# mTip_6_std <- glmer(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTip_6_std)
+# plot(mCC_0_std_simres, sub="mTip_6_std")#step failure
+
+
+mTip_0_stdTMB <- glmmTMB(TipDB01 ~ (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mTip_0_stdTMB)
+#plot(mCC_0_std_simres, sub="mTip_0_stdTMB")#
+summary(mTip_0_stdTMB)
+
+mTip_4_stdTMB <- glmmTMB(TipDB01 ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mTip_4_stdTMB)
+#plot(mCC_0_std_simres, sub="mTip_4_stdTMB")#looks good
+summary(mTip_4_stdTMB)
+
+mTip_4_TMB <- glmmTMB(TipDB01 ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+# mTip_6_stdTMB <- glmmTMB(TipDB01 ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mTip_6_stdTMB)
+# plot(mCC_0_std_simres, sub="mTip_6_stdTMB")#step failure 
+
+TipDB_df<-tidy(mTip_4_stdTMB, conf.int = TRUE, effects = "fixed")
+TipDB_df$Indicator <- "Tip dieback"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfTip_MWMT_SHM<-ggpredict(mTip_4_TMB, terms = c("MWMT_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfTip_TD_SHM<-ggpredict(mTip_4_TMB, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfTip_SHM_MWMT<-ggpredict(mTip_4_TMB, terms = c("SHM_dist [all]", "MWMT_dist[-4, -2,0,4]"))
+dfTip_SHM_TD<-ggpredict(mTip_4_TMB, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+print(dfTip_SHM_TD,n=Inf)
+ggpredict(mTip_4_TMB, terms=c("TD_dist [0,-1,-1.5]", "SHM_dist[0,-15,-80]","MWMT_dist[0,-3,-4.5]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+
+(pTip22<-ggplot(dfTip_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of tip dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pTip21<-ggplot(dfTip_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality\ntransfer distance (°C)",y ="Probability of tip dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pTip20<-ggplot(dfTip_SHM_MWMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MWMT transfer distance",values=palMCMT4) +
+    scale_fill_manual("MWMT transfer distance",values=palMCMT4) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index\ntransfer distance (°C)",y ="Probability of tip dieback")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pTip200<-ggplot(dfTip_SHM_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance",values=palTDnew, guide="none") +
+    scale_fill_manual("TD transfer distance",values=palTDnew, guide="none") +
+     #      guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = NULL,y ="Probability of tip dieback",title="Figure 4")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+
+
+
+## Galls
+Null model
+
+```{r,echo=FALSE}
+# mGall_0_std <- glmer(Gall ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mGall_0_std)
+# plot(mCC_0_std_simres, sub="mGall_0_std")#
+# 
+# mGall_4_std <- glmer(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mGall_4_std)
+# plot(mCC_0_std_simres, sub="mGall_4_std")#looks good
+# 
+# mGall_6_std <- glmer(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mGall_6_std)
+# plot(mCC_0_std_simres, sub="mGall_6_std")#looks good
+#  
+
+mGall_0_stdTMB <- glmmTMB(Gall ~  (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mGall_0_stdTMB)
+#plot(mCC_0_std_simres, sub="mGall_0_stdTMB")#
+summary(mGall_0_stdTMB)
+
+mGall_4_stdTMB <- glmmTMB(Gall ~ MWMT_dist_std +  I(MWMT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+#mCC_0_std_simres <- simulateResiduals(mGall_4_stdTMB)
+#plot(mCC_0_std_simres, sub="mGall_4_stdTMB")#looks good
+summary(mGall_4_stdTMB)
+
+mGall_4_TMB <- glmmTMB(Gall ~ MWMT_dist +  I(MWMT_dist^2) + SHM_dist + I(SHM_dist^2) + TD_dist + I(TD_dist^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+
+# mGall_6_stdTMB <- glmmTMB(Gall ~ MAT_dist_std +  I(MAT_dist_std^2) + SHM_dist_std + I(SHM_dist_std^2) + TD_dist_std + I(TD_dist_std^2) + (1 | SITE_NAME/BLOCK/PLT) + (1 | REGION), data = field_climate_08_23, family = binomial(link = "logit"))
+# mCC_0_std_simres <- simulateResiduals(mGall_6_stdTMB)
+# plot(mCC_0_std_simres, sub="mGall_6_stdTMB")#looks good
+
+Gall_df<-tidy(mGall_4_stdTMB, conf.int = TRUE, effects = "fixed")
+Gall_df$Indicator <- "Bacterial galls"
+```
+
+### Prediction plots
+```{r, echo=FALSE, warning=FALSE}
+dfGall_MWMT_SHM<-ggpredict(mGall_4_TMB, terms = c("MWMT_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfGall_TD_SHM<-ggpredict(mGall_4_TMB, terms = c("TD_dist [all]", "SHM_dist[-200, 0, 200]"))
+dfGall_SHM_MWMT<-ggpredict(mGall_4_TMB, terms = c("SHM_dist [all]", "MWMT_dist[-4, -2,0,4]"))
+dfGall_SHM_TD<-ggpredict(mGall_4_TMB, terms = c("SHM_dist [all]", "TD_dist[-5, 0, 5,10]"))
+
+print(dfGall_SHM_TD,n=Inf)
+ggpredict(mGall_4_TMB, terms=c("TD_dist [0,-1,-1.5]", "SHM_dist[0,-15,-80]","MWMT_dist[0,-3,-4.5]"))
+```
+
+```{r, echo=FALSE, warning=FALSE}
+palTD <- c("#2686A0FF", "#94B9A7FF", "#A36B2BFF")
+
+(pGall22<-ggplot(dfGall_MWMT_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Mean warmest month temperature\ntransfer distance (°C)",y ="Probability of bacterial galls")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pGall21<-ggplot(dfGall_TD_SHM, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("SHM transfer distance",values=palTD) +
+    scale_fill_manual("SHM transfer distance",values=palTD) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Continentality\ntransfer distance (°C)",y ="Probability of bacterial galls")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pGall20<-ggplot(dfGall_SHM_MWMT, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("MWMT transfer distance",values=palMCMT4) +
+    scale_fill_manual("MWMT transfer distance",values=palMCMT4) +
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "Summer heat moisture index\ntransfer distance (°C)",y ="Probability of bacterial galls")+
+    theme(axis.text.x = element_text(size=10),
+          axis.text.y = element_text(size=10),
+          axis.title.x = element_text(size=10.5),
+          axis.title.y = element_text(size=10.5))+
+    geom_ribbon(alpha = .1, colour = NA) )
+
+(pGall200<-ggplot(dfGall_SHM_TD, aes(x=x, y = predicted, ymin=conf.low,ymax=conf.high, colour = group, fill = group))+
+    scale_color_manual("TD transfer distance",values=palTDnew,guide="none") +
+    scale_fill_manual("TD transfer distance",values=palTDnew, guide="none") +
+    #       guides(color = guide_legend(reverse = TRUE), fill= guide_legend(reverse = TRUE))+
+   # scale_y_continuous(breaks=c(0,0.02,0.04,0.06,0.08))+
+    geom_line(size=0.8)+
+    theme_classic()+
+    labs(x = "SHM transfer distance",y ="Probability of bacterial galls")+
+    theme(axis.text.x = element_text(size=9.5),
+          axis.text.y = element_text(size=9.5),
+          axis.title.x = element_text(size=10),
+          axis.title.y = element_text(size=10))+
+    geom_ribbon(alpha = .1, colour = NA) )
+```
+
+# Figure 4 multipanel
+```{r, echo=FALSE}
+Fig4mult <- (pTip200|pBrDB200)/(pTDB200|pSnk200)/(pPBl200|pGall200)
+Fig4mult_ann <- Fig4mult + plot_annotation(tag_levels = c("a"))
+
+ggsave(Fig4mult_ann, file="SSMT_FH_TipTopBoleGall_Figure4_update.png", dpi=600, height=8.6, width=7)
+ggsave(Fig4mult_ann, file="Figure4_update.eps", dpi=600, height=8.6, width=7)
+```
+
+
+# Figure 2
+## Combine all fixed effect and CI dataframes
+```{r, echo=FALSE}
+fixed.eff.CI <- bind_rows(CC_df,CT_df,BrDB_df,Gall_df,TipDB_df,TDB_df, Snk_df, PBl_df) %>% 
+  mutate(term.simp = if_else(term == "(Intercept)", "Intercept",
+                                             if_else(term == "MSP_dist_std", "MSP",
+                                                     if_else(term == "I(MSP_dist_std^2)", "MSP",
+                                if_else(term=="TD_dist_std", "TD",
+                                    if_else(term=="I(TD_dist_std^2)", "TD",
+                                        if_else(term=="MCMT_dist_std", "MCMT",
+                                            if_else(term=="I(MCMT_dist_std^2)", "MCMT",
+                                                    if_else(term=="MWMT_dist_std", "MWMT",
+                                                         if_else(term=="I(MWMT_dist_std^2)", "MWMT",
+                                                               if_else(term=="SHM_dist_std", "SHM",
+                                                                   if_else(term=="I(SHM_dist_std^2)", "SHM","NA"))))))))))))%>%
+  mutate(order = if_else(term == "(Intercept)", "NA",
+                                             if_else(term == "MSP_dist_std", "first order",
+                                                     if_else(term == "I(MSP_dist_std^2)", "square",
+                                if_else(term=="TD_dist_std", "first order",
+                                    if_else(term=="I(TD_dist_std^2)", "square",
+                                        if_else(term=="MCMT_dist_std", "first order",
+                                            if_else(term=="I(MCMT_dist_std^2)", "square",
+                                                    if_else(term=="MWMT_dist_std", "first order",
+                                                         if_else(term=="I(MWMT_dist_std^2)", "square",
+                                                               if_else(term=="SHM_dist_std", "first order",
+                                                                   if_else(term=="I(SHM_dist_std^2)", "square","NA"))))))))))))
+```
+
+## Plot
+```{r, echo=FALSE}
+pal6_t <- turbo(6, alpha=1, begin=0.2, end=1)
+pal5_t <- turbo(5, alpha=1, begin=0.2, end=1)
+
+fixed.eff.CI.simp <- fixed.eff.CI %>%
+  mutate(term.f = fct_relevel(term.simp, "Intercept", "MCMT","MWMT","MSP", "SHM","TD")) %>%
+  mutate(Indicator.f = fct_relevel(Indicator, "Bacterial galls","Pitch streaming on bole","Sunken bole", "Top dieback", "Tip dieback","Branch dieback","Crown sparseness" ,"Chlorosis"))
+
+
+(CoefPlot_redone<-fixed.eff.CI.simp %>% filter(term.f !="Intercept") %>% 
+              ggplot(aes(estimate, Indicator.f, color=term.f, xmin=conf.low,xmax = conf.high)) + 
+        geom_point(aes(pch=order),position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")  +
+    theme_classic()+
+    geom_errorbar(aes(linetype=order),position = position_dodge2(.9, padding = .1, reverse=TRUE), stat="identity")+
+    geom_vline(xintercept=0,lty=2)+
+  labs(x = "Standardized coefficient",y ="", shape="Term",linetype="Term")+
+      theme(legend.position = "right",
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=11),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size=12),
+        plot.title = element_text(size=10))+
+    scale_y_discrete(labels = c("Bacterial\ngalls", "Pitch\nstreaming\non bole", "Sunken\nbole","Top\ndieback","Tip\ndieback","Branch\ndieback", "Crown\nsparseness", "Chlorosis"))+
+   scale_color_manual("Climate\npredictor",values=pal5_t, labels = c('MCMT', 'MWMT', 'MSP','SHM','TD'))+
+  guides(colour = guide_legend(order = 1),
+         shape  = guide_legend(order = 2),
+         linetype= guide_legend(order = 2))+
+    annotate("text", x= -2, y = 8.5, label = "Figure 2", size=4))
+
+#ggsave(CoefPlot_redone, file="Figure 2.png", dpi=1000, height=8, width=6)
+#ggsave(CoefPlot_redone, file="Figure 2.eps", dpi=1000, height=8, width=6)
+```
+
